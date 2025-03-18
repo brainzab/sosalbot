@@ -20,6 +20,9 @@ DEEPSEEK_API_KEY = os.getenv('DEEPSEEK_API_KEY')
 OPENWEATHER_API_KEY = os.getenv('OPENWEATHER_API_KEY')
 CHAT_ID = os.getenv('CHAT_ID')
 
+# Версия кода для проверки
+CODE_VERSION = "1.2"
+
 # Настройка клиента DeepSeek API
 deepseek_client = OpenAI(
     api_key=DEEPSEEK_API_KEY,
@@ -78,6 +81,7 @@ async def get_crypto_prices():
 
 # Функция для отправки утреннего сообщения
 async def send_morning_message(application):
+    logger.info("Отправка утреннего сообщения")
     cities = {
         "Минск": "Minsk,BY",
         "Жлобин": "Zhlobin,BY",
@@ -116,6 +120,7 @@ async def send_morning_message(application):
     )
     
     await application.bot.send_message(chat_id=CHAT_ID, text=message, parse_mode='Markdown')
+    logger.info("Утреннее сообщение отправлено")
 
 # Асинхронная функция обработки сообщений
 async def handle_message(update, context):
@@ -135,7 +140,7 @@ async def handle_message(update, context):
                 reaction=TARGET_REACTION
             )
         except Exception as e:
-            print(f"Ошибка при установке реакции: {e}")
+            logger.error(f"Ошибка при установке реакции: {e}")
 
     # Реакция на "сосал?" или "sosal?"
     if message_text in ['сосал?', 'sosal?']:
@@ -182,13 +187,17 @@ async def handle_message(update, context):
             await message.reply_text(f"Ошибка, ёбана: {str(e)}")
 
 async def main():
+    # Логируем версию кода
+    logger.info(f"Запуск бота, версия кода: {CODE_VERSION}")
+
     # Создаем приложение
     application = Application.builder().token(TELEGRAM_TOKEN).read_timeout(30).build()
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
 
-    # Инициализируем приложение
+    # Инициализируем и запускаем приложение
     await application.initialize()
     await application.start()
+    logger.info("Бот полностью запущен")
 
     # Настройка планировщика
     scheduler = AsyncIOScheduler()
@@ -200,13 +209,25 @@ async def main():
     )
     scheduler.start()
 
-    # Запускаем polling
+    # Запускаем polling и обрабатываем завершение
     try:
         await application.run_polling(allowed_updates=filters.Update.ALL)
+    except Exception as e:
+        logger.error(f"Ошибка в run_polling: {e}")
     finally:
         await application.stop()
         await application.shutdown()
+        logger.info("Бот остановлен")
 
+# Запускаем основной цикл
 if __name__ == '__main__':
-    loop = asyncio.get_event_loop()
-    loop.run_until_complete(main())
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
+    try:
+        loop.run_until_complete(main())
+    except KeyboardInterrupt:
+        logger.info("Бот остановлен пользователем")
+    except Exception as e:
+        logger.error(f"Ошибка в главном цикле: {e}")
+    finally:
+        loop.close()
