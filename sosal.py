@@ -9,6 +9,7 @@ import aiohttp
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.cron import CronTrigger
 import pytz
+import telegram  # Add this import statement
 
 # Set up logging
 logging.basicConfig(level=logging.INFO)
