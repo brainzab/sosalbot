@@ -1,7 +1,7 @@
 import random
 import os
 import asyncio
-from telegram.ext import ApplicationBuilder, MessageHandler, filters, ContextTypes
+from telegram.ext import Application, MessageHandler, filters
 from openai import OpenAI
 from datetime import datetime
 import logging
@@ -9,35 +9,41 @@ import aiohttp
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.cron import CronTrigger
 import pytz
-from telegram import Update
 
-# Set up logging
+# Настройка логирования
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# Load environment variables
+# Токен Telegram бота и API-ключи из переменных окружения
 TELEGRAM_TOKEN = os.getenv('TELEGRAM_TOKEN')
 DEEPSEEK_API_KEY = os.getenv('DEEPSEEK_API_KEY')
 OPENWEATHER_API_KEY = os.getenv('OPENWEATHER_API_KEY')
 CHAT_ID = os.getenv('CHAT_ID')
 
-# Version control
+# Версия кода для проверки
 CODE_VERSION = "1.3"
 
-# Initialize DeepSeek API client
+# Настройка клиента DeepSeek API
 deepseek_client = OpenAI(
     api_key=DEEPSEEK_API_KEY,
     base_url="https://api.deepseek.com"
 )
 
-# Predefined responses
+# Список ответов для "сосал?" и "sosal?"
 RESPONSES_SOSAL = ['да', 'было', 'ну сосал', 'прям ща']
 RARE_RESPONSE_SOSAL = 'пошел нахуй'
+
+# Ответ для "летал?"
 RESPONSE_LETAL = 'да'
+
+# Список ответов для "скамил?"
 RESPONSES_SCAMIL = ['да', 'было', 'с кайфом']
+
+# ID пользователя для реакции и сама реакция
 TARGET_USER_ID = 660949286
 TARGET_REACTION = [{"type": "emoji", "emoji": "😁"}]
 
+# Функция для получения погоды
 async def get_weather(city):
     url = f"http://api.openweathermap.org/data/2.5/weather?q={city}&appid={OPENWEATHER_API_KEY}&units=metric&lang=ru"
     async with aiohttp.ClientSession() as session:
@@ -49,6 +55,7 @@ async def get_weather(city):
                 return f"{temp}°C, {desc}"
             return "Нет данных"
 
+# Функция для получения курсов USD/BYN и USD/RUB с CurrencyAPI
 async def get_currency_rates():
     url = "https://cdn.jsdelivr.net/npm/@fawazahmed0/currency-api@latest/v1/currencies/usd.json"
     async with aiohttp.ClientSession() as session:
@@ -60,6 +67,7 @@ async def get_currency_rates():
                 return usd_byn, usd_rub
             return "Нет данных", "Нет данных"
 
+# Функция для получения цен BTC и WLD
 async def get_crypto_prices():
     url = "https://api.coingecko.com/api/v3/simple/price?ids=bitcoin,worldcoin&vs_currencies=usd"
     async with aiohttp.ClientSession() as session:
@@ -71,8 +79,9 @@ async def get_crypto_prices():
                 return btc_price, wld_price
             return "Нет данных", "Нет данных"
 
+# Функция для отправки утреннего сообщения
 async def send_morning_message(application):
-    logger.info("Sending morning message")
+    logger.info("Отправка утреннего сообщения")
     cities = {
         "Минск": "Minsk,BY",
         "Жлобин": "Zhlobin,BY",
@@ -81,17 +90,19 @@ async def send_morning_message(application):
         "Шри-Ланка": "Colombo,LK",
         "Ноябрьск": "Noyabrsk,RU"
     }
-
+    
+    # Получаем данные
     weather_data = {}
     for city_name, city_code in cities.items():
         weather_data[city_name] = await get_weather(city_code)
-
+    
     usd_byn_rate, usd_rub_rate = await get_currency_rates()
     btc_price_usd, wld_price_usd = await get_crypto_prices()
-
+    
     btc_price_byn = btc_price_usd * usd_byn_rate if isinstance(btc_price_usd, float) and isinstance(usd_byn_rate, float) else "Нет данных"
     wld_price_byn = wld_price_usd * usd_byn_rate if isinstance(wld_price_usd, float) and isinstance(usd_byn_rate, float) else "Нет данных"
 
+    # Формируем сообщение с разметкой
     message = (
         "Родные мои, всем доброе утро и хорошего дня! ❤️\n\n"
         "**Положняк по погоде:**\n"
@@ -107,17 +118,20 @@ async def send_morning_message(application):
         f"₿ *BTC*: ${btc_price_usd:,.2f} USD | {btc_price_byn:,.2f} BYN\n"
         f"🌍 *WLD*: ${wld_price_usd:.2f} USD | {wld_price_byn:.2f} BYN"
     )
-
+    
     await application.bot.send_message(chat_id=CHAT_ID, text=message, parse_mode='Markdown')
-    logger.info("Morning message sent")
+    logger.info("Утреннее сообщение отправлено")
 
-async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
+# Асинхронная функция обработки сообщений
+async def handle_message(update, context):
     message = update.message
     message_text = message.text.lower() if message.text else ""
     bot_username = f"@{context.bot.username.lower()}"
 
-    logger.info(f"Message from {message.from_user.id}: {message.text or 'No text'}")
+    # Логируем все сообщения
+    logger.info(f"Сообщение от {message.from_user.id}: {message.text or 'Без текста'}")
 
+    # Реакция на сообщения целевого пользователя
     if message.from_user.id == TARGET_USER_ID:
         try:
             await context.bot.set_message_reaction(
@@ -126,33 +140,37 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 reaction=TARGET_REACTION
             )
         except Exception as e:
-            logger.error(f"Error setting reaction: {e}")
+            logger.error(f"Ошибка при установке реакции: {e}")
 
+    # Реакция на "сосал?" или "sosal?"
     if message_text in ['сосал?', 'sosal?']:
         if random.random() < 0.1:
             await message.reply_text(RARE_RESPONSE_SOSAL)
         else:
             random_response = random.choice(RESPONSES_SOSAL)
             await message.reply_text(random_response)
-
+    
+    # Реакция на "летал?"
     elif message_text == 'летал?':
         await message.reply_text(RESPONSE_LETAL)
-
+    
+    # Реакция на "скамил?"
     elif message_text == 'скамил?':
         random_response = random.choice(RESPONSES_SCAMIL)
         await message.reply_text(random_response)
-
+    
+    # Реакция на сообщения с упоминанием бота
     elif message_text and bot_username in message_text:
         query = message_text.replace(bot_username, "").strip()
         if not query:
             await message.reply_text("И хуле ты меня тегнул, петушара?")
             return
-
+        
         current_year = datetime.now().year
         if "год" in query or "сейчас" in query or "дата" in query:
             await message.reply_text(f"Сейчас {current_year} год, мудила. Чё, календарь потерял?")
             return
-
+        
         try:
             response = deepseek_client.chat.completions.create(
                 model="deepseek-chat",
@@ -169,15 +187,19 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await message.reply_text(f"Ошибка, ёбана: {str(e)}")
 
 async def main():
-    logger.info(f"Starting bot, version: {CODE_VERSION}")
+    # Логируем версию кода
+    logger.info(f"Запуск бота, версия кода: {CODE_VERSION}")
 
-    application = ApplicationBuilder().token(TELEGRAM_TOKEN).read_timeout(30).build()
+    # Создаем приложение
+    application = Application.builder().token(TELEGRAM_TOKEN).read_timeout(30).build()
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
 
+    # Инициализируем и запускаем приложение
     await application.initialize()
     await application.start()
-    logger.info("Bot fully started")
+    logger.info("Бот полностью запущен")
 
+    # Настройка планировщика
     scheduler = AsyncIOScheduler()
     moscow_tz = pytz.timezone('Europe/Moscow')
     scheduler.add_job(
@@ -187,23 +209,25 @@ async def main():
     )
     scheduler.start()
 
+    # Запускаем polling и обрабатываем завершение
     try:
-        await application.run_polling(allowed_updates=Update)
+        await application.run_polling()
     except Exception as e:
-        logger.error(f"Error in run_polling: {e}")
+        logger.error(f"Ошибка в run_polling: {e}")
     finally:
         await application.stop()
         await application.shutdown()
-        logger.info("Bot stopped")
+        logger.info("Бот остановлен")
 
+# Запускаем основной цикл
 if __name__ == '__main__':
     loop = asyncio.new_event_loop()
     asyncio.set_event_loop(loop)
     try:
         loop.run_until_complete(main())
     except KeyboardInterrupt:
-        logger.info("Bot stopped by user")
+        logger.info("Бот остановлен пользователем")
     except Exception as e:
-        logger.error(f"Error in main loop: {e}")
+        logger.error(f"Ошибка в главном цикле: {e}")
     finally:
         loop.close()
