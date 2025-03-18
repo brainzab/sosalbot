@@ -21,7 +21,7 @@ OPENWEATHER_API_KEY = os.getenv('OPENWEATHER_API_KEY')
 CHAT_ID = os.getenv('CHAT_ID')
 
 # Версия кода для проверки
-CODE_VERSION = "1.3"
+CODE_VERSION = "1.4"
 
 # Настройка клиента DeepSeek API
 deepseek_client = OpenAI(
@@ -53,6 +53,7 @@ async def get_weather(city):
                 temp = data['main']['temp']
                 desc = data['weather'][0]['description']
                 return f"{temp}°C, {desc}"
+            logger.error(f"Ошибка получения погоды для {city}: {response.status}")
             return "Нет данных"
 
 # Функция для получения курсов USD/BYN и USD/RUB с CurrencyAPI
@@ -65,6 +66,7 @@ async def get_currency_rates():
                 usd_byn = data['usd']['byn']
                 usd_rub = data['usd']['rub']
                 return usd_byn, usd_rub
+            logger.error(f"Ошибка получения курсов валют: {response.status}")
             return "Нет данных", "Нет данных"
 
 # Функция для получения цен BTC и WLD
@@ -77,6 +79,7 @@ async def get_crypto_prices():
                 btc_price = data['bitcoin']['usd']
                 wld_price = data['worldcoin']['usd']
                 return btc_price, wld_price
+            logger.error(f"Ошибка получения цен криптовалют: {response.status}")
             return "Нет данных", "Нет данных"
 
 # Функция для отправки утреннего сообщения
@@ -119,8 +122,11 @@ async def send_morning_message(application):
         f"🌍 *WLD*: ${wld_price_usd:.2f} USD | {wld_price_byn:.2f} BYN"
     )
     
-    await application.bot.send_message(chat_id=CHAT_ID, text=message, parse_mode='Markdown')
-    logger.info("Утреннее сообщение отправлено")
+    try:
+        await application.bot.send_message(chat_id=CHAT_ID, text=message, parse_mode='Markdown')
+        logger.info("Утреннее сообщение отправлено")
+    except Exception as e:
+        logger.error(f"Ошибка отправки утреннего сообщения: {e}")
 
 # Асинхронная функция обработки сообщений
 async def handle_message(update, context):
@@ -208,26 +214,21 @@ async def main():
         args=[application]
     )
     scheduler.start()
+    logger.info("Планировщик запущен")
 
     # Запускаем polling и обрабатываем завершение
     try:
         await application.run_polling()
     except Exception as e:
         logger.error(f"Ошибка в run_polling: {e}")
+        raise  # Поднимаем исключение для полной трассировки
     finally:
         await application.stop()
         await application.shutdown()
         logger.info("Бот остановлен")
 
-# Запускаем основной цикл
 if __name__ == '__main__':
-    loop = asyncio.new_event_loop()
-    asyncio.set_event_loop(loop)
     try:
-        loop.run_until_complete(main())
-    except KeyboardInterrupt:
-        logger.info("Бот остановлен пользователем")
+        asyncio.run(main())
     except Exception as e:
         logger.error(f"Ошибка в главном цикле: {e}")
-    finally:
-        loop.close()
