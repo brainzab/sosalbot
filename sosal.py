@@ -21,7 +21,7 @@ OPENWEATHER_API_KEY = os.getenv('OPENWEATHER_API_KEY')
 CHAT_ID = os.getenv('CHAT_ID')
 
 # Версия кода для проверки
-CODE_VERSION = "1.2"
+CODE_VERSION = "1.3"
 
 # Настройка клиента DeepSeek API
 deepseek_client = OpenAI(
@@ -211,7 +211,8 @@ async def main():
 
     # Запускаем polling и обрабатываем завершение
     try:
-        await application.run_polling(allowed_updates=telegram.ext.Application.get_allowed_updates())
+        # FIX: Removed incorrect filters.Update.ALL parameter
+        await application.run_polling()
     except Exception as e:
         logger.error(f"Ошибка в run_polling: {e}")
     finally:
