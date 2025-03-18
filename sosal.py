@@ -211,7 +211,7 @@ async def main():
 
     # Запускаем polling и обрабатываем завершение
     try:
-        await application.run_polling(allowed_updates=filters.Update.ALL)
+        await application.run_polling(allowed_updates=telegram.ext.Application.get_allowed_updates())
     except Exception as e:
         logger.error(f"Ошибка в run_polling: {e}")
     finally:
