@@ -22,7 +22,7 @@ async def handle_message(update, context):
     message_text = update.message.text.lower()
     
     # Реакция на "сосал?" или "sosal?"
-    if message_text in ['сосал?', 'sosal?']:
+    if message_text in ['сосал?', 'sosal?', 'сасал?']:
         # Генерируем случайное число от 0 до 1
         if random.random() < 0.1:  # 10% шанс
             await update.message.reply_text(RARE_RESPONSE_SOSAL)
