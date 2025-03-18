@@ -5,8 +5,7 @@ from openai import OpenAI
 from datetime import datetime
 import logging
 import aiohttp
-import asyncio
-from apscheduler.schedulers.asyncio import AsyncIOScheduler  # Исправленный импорт
+from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.cron import CronTrigger
 import pytz
 
@@ -37,7 +36,7 @@ RESPONSE_LETAL = 'да'
 RESPONSES_SCAMIL = ['да', 'было', 'с кайфом']
 
 # ID пользователя для реакции и сама реакция
-TARGET_USER_ID = 660949286  # Замените на реальный ID
+TARGET_USER_ID = 660949286
 TARGET_REACTION = [{"type": "emoji", "emoji": "😁"}]
 
 # Функция для получения погоды
@@ -182,11 +181,15 @@ async def handle_message(update, context):
             await message.reply_text(f"Ошибка, ёбана: {str(e)}")
 
 async def main():
+    # Создаем приложение
     application = Application.builder().token(TELEGRAM_TOKEN).read_timeout(30).build()
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
 
+    # Инициализируем приложение
+    await application.initialize()
+
     # Настройка планировщика
-    scheduler = AsyncIOScheduler()  # Исправленный класс
+    scheduler = AsyncIOScheduler()
     moscow_tz = pytz.timezone('Europe/Moscow')
     scheduler.add_job(
         send_morning_message,
@@ -195,7 +198,11 @@ async def main():
     )
     scheduler.start()
 
-    await application.run_polling()
+    # Запускаем polling
+    try:
+        await application.run_polling()
+    finally:
+        await application.shutdown()
 
 if __name__ == '__main__':
     asyncio.run(main())
