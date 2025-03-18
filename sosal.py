@@ -9,7 +9,8 @@ import aiohttp
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.cron import CronTrigger
 import pytz
-import telegram  # Add this import statement
+from telegram.ext import ApplicationBuilder, ContextTypes, CommandHandler
+from telegram import Update
 
 # Set up logging
 logging.basicConfig(level=logging.INFO)
@@ -111,7 +112,7 @@ async def send_morning_message(application):
     await application.bot.send_message(chat_id=CHAT_ID, text=message, parse_mode='Markdown')
     logger.info("Morning message sent")
 
-async def handle_message(update, context):
+async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     message = update.message
     message_text = message.text.lower() if message.text else ""
     bot_username = f"@{context.bot.username.lower()}"
@@ -171,7 +172,7 @@ async def handle_message(update, context):
 async def main():
     logger.info(f"Starting bot, version: {CODE_VERSION}")
 
-    application = Application.builder().token(TELEGRAM_TOKEN).read_timeout(30).build()
+    application = ApplicationBuilder().token(TELEGRAM_TOKEN).read_timeout(30).build()
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
 
     await application.initialize()
@@ -188,7 +189,7 @@ async def main():
     scheduler.start()
 
     try:
-        await application.run_polling(allowed_updates=telegram.ext.Application.get_allowed_updates())
+        await application.run_polling(allowed_updates=Update)
     except Exception as e:
         logger.error(f"Error in run_polling: {e}")
     finally:
