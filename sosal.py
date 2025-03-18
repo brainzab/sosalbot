@@ -1,7 +1,7 @@
 import random
 import os
 import asyncio
-from telegram.ext import Application, MessageHandler, filters
+from telegram.ext import ApplicationBuilder, MessageHandler, filters, ContextTypes
 from openai import OpenAI
 from datetime import datetime
 import logging
@@ -9,7 +9,6 @@ import aiohttp
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.cron import CronTrigger
 import pytz
-from telegram.ext import ApplicationBuilder, ContextTypes, CommandHandler
 from telegram import Update
 
 # Set up logging
