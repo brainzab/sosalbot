@@ -1,1 +1,1 @@
-worker: python sosal.py
+worker: python bot.py
