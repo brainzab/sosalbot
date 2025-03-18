@@ -6,7 +6,7 @@ from datetime import datetime
 import logging
 import aiohttp
 import asyncio
-from apscheduler.schedulers.async_ import AsyncScheduler
+from apscheduler.schedulers.asyncio import AsyncIOScheduler  # Исправленный импорт
 from apscheduler.triggers.cron import CronTrigger
 import pytz
 
@@ -37,8 +37,8 @@ RESPONSE_LETAL = 'да'
 RESPONSES_SCAMIL = ['да', 'было', 'с кайфом']
 
 # ID пользователя для реакции и сама реакция
-TARGET_USER_ID = 660949286  # Замените на реальный ID
-TARGET_REACTION = [{"type": "emoji", "emoji": "😁"}]
+TARGET_USER_ID = 123456789  # Замените на реальный ID
+TARGET_REACTION = [{"type": "emoji", "emoji": "👍"}]
 
 # Функция для получения погоды
 async def get_weather(city):
@@ -101,14 +101,14 @@ async def send_morning_message(context):
     # Формируем сообщение с разметкой
     message = (
         "Родные мои, всем доброе утро и хорошего дня! ❤️\n\n"
-        "**Погода на сегодня:**\n"
+        "**Погода сегодня:**\n"
         f"🌥 *Минск*: {weather_data['Минск']}\n"
         f"🌥 *Жлобин*: {weather_data['Жлобин']}\n"
         f"🌥 *Гомель*: {weather_data['Гомель']}\n"
         f"🌥 *Житковичи*: {weather_data['Житковичи']}\n"
         f"🌴 *Шри-Ланка*: {weather_data['Шри-Ланка']}\n"
         f"❄️ *Ноябрьск*: {weather_data['Ноябрьск']}\n\n"
-        "**Положняк по курсам:**\n"
+        "**Финансы:**\n"
         f"💵 *USD/BYN*: {usd_byn_rate:.2f} BYN\n"
         f"💵 *USD/RUB*: {usd_rub_rate:.2f} RUB\n"
         f"₿ *BTC*: ${btc_price_usd:,.2f} USD | {btc_price_byn:,.2f} BYN\n"
@@ -186,14 +186,14 @@ async def main():
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
 
     # Настройка планировщика
-    scheduler = AsyncScheduler()
+    scheduler = AsyncIOScheduler()  # Исправленный класс
     moscow_tz = pytz.timezone('Europe/Moscow')
     scheduler.add_job(
         send_morning_message,
         trigger=CronTrigger(hour=7, minute=59, timezone=moscow_tz),
         args=[application]
     )
-    await scheduler.start()
+    scheduler.start()
 
     await application.run_polling()
 
