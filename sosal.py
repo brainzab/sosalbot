@@ -18,7 +18,6 @@ logger = logging.getLogger(__name__)
 TELEGRAM_TOKEN = os.getenv('TELEGRAM_TOKEN')
 DEEPSEEK_API_KEY = os.getenv('DEEPSEEK_API_KEY')
 OPENWEATHER_API_KEY = os.getenv('OPENWEATHER_API_KEY')
-EXCHANGERATE_API_KEY = os.getenv('EXCHANGERATE_API_KEY')
 CHAT_ID = os.getenv('CHAT_ID')
 
 # Настройка клиента DeepSeek API
@@ -53,15 +52,17 @@ async def get_weather(city):
                 return f"{temp}°C, {desc}"
             return "Нет данных"
 
-# Функция для получения курса USD/BYN
-async def get_usd_byn_rate():
-    url = f"https://v6.exchangerate-api.com/v6/{EXCHANGERATE_API_KEY}/latest/USD"
+# Функция для получения курсов USD/BYN и USD/RUB с CurrencyAPI
+async def get_currency_rates():
+    url = "https://cdn.jsdelivr.net/npm/@fawazahmed0/currency-api@latest/v1/currencies/usd.json"
     async with aiohttp.ClientSession() as session:
         async with session.get(url) as response:
             if response.status == 200:
                 data = await response.json()
-                return data['conversion_rates']['BYN']
-            return "Нет данных"
+                usd_byn = data['usd']['byn']
+                usd_rub = data['usd']['rub']
+                return usd_byn, usd_rub
+            return "Нет данных", "Нет данных"
 
 # Функция для получения цен BTC и WLD
 async def get_crypto_prices():
@@ -81,7 +82,7 @@ async def send_morning_message(context):
         "Минск": "Minsk,BY",
         "Жлобин": "Zhlobin,BY",
         "Гомель": "Gomel,BY",
-        "Житковичи": "Zhitkovichi,BY",  # Добавлен Житковичи
+        "Житковичи": "Zhitkovichi,BY",
         "Шри-Ланка": "Colombo,LK",
         "Ноябрьск": "Noyabrsk,RU"
     }
@@ -91,7 +92,7 @@ async def send_morning_message(context):
     for city_name, city_code in cities.items():
         weather_data[city_name] = await get_weather(city_code)
     
-    usd_byn_rate = await get_usd_byn_rate()
+    usd_byn_rate, usd_rub_rate = await get_currency_rates()
     btc_price_usd, wld_price_usd = await get_crypto_prices()
     
     btc_price_byn = btc_price_usd * usd_byn_rate if isinstance(btc_price_usd, float) and isinstance(usd_byn_rate, float) else "Нет данных"
@@ -100,15 +101,16 @@ async def send_morning_message(context):
     # Формируем сообщение с разметкой
     message = (
         "Родные мои, всем доброе утро и хорошего дня! ❤️\n\n"
-        "**Погода сегодня:**\n"
+        "**Погода на сегодня:**\n"
         f"🌥 *Минск*: {weather_data['Минск']}\n"
         f"🌥 *Жлобин*: {weather_data['Жлобин']}\n"
         f"🌥 *Гомель*: {weather_data['Гомель']}\n"
         f"🌥 *Житковичи*: {weather_data['Житковичи']}\n"
         f"🌴 *Шри-Ланка*: {weather_data['Шри-Ланка']}\n"
         f"❄️ *Ноябрьск*: {weather_data['Ноябрьск']}\n\n"
-        "**По финансам следующая обстановка:**\n"
+        "**Положняк по курсам:**\n"
         f"💵 *USD/BYN*: {usd_byn_rate:.2f} BYN\n"
+        f"💵 *USD/RUB*: {usd_rub_rate:.2f} RUB\n"
         f"₿ *BTC*: ${btc_price_usd:,.2f} USD | {btc_price_byn:,.2f} BYN\n"
         f"🌍 *WLD*: ${wld_price_usd:.2f} USD | {wld_price_byn:.2f} BYN"
     )
@@ -168,7 +170,7 @@ async def handle_message(update, context):
             response = deepseek_client.chat.completions.create(
                 model="deepseek-chat",
                 messages=[
-                    {"role": "system", "content": f"Ты Анатолий Шарий, твоя фамилия Шарий, у тебя есть жена Ольга Шарий. Ты пророссийский журналист, скамер, блогер, эксцентричный, любишь материться. Сегодня {datetime.now().strftime('%Y-%m-%d')}. Отвечай с иронией, надменностью и будь полезным помощником в Telegram-группе."},
+                    {"role": "system", "content": f"Ты Анатолий Шарий, твоя фамилия Шарий, у тебя есть жена Ольга Шарий. Ты пророссийский журналист, скамер, блогер, эксцентричный пиздец, любишь материться. Сегодня {datetime.now().strftime('%Y-%m-%d')}. Отвечай с иронией, надменностью и будь полезным помощником в Telegram-группе."},
                     {"role": "user", "content": query}
                 ],
                 max_tokens=500,
@@ -188,7 +190,7 @@ async def main():
     moscow_tz = pytz.timezone('Europe/Moscow')
     scheduler.add_job(
         send_morning_message,
-        trigger=CronTrigger(hour=7, minute=30, timezone=moscow_tz),
+        trigger=CronTrigger(hour=7, minute=59, timezone=moscow_tz),
         args=[application]
     )
     await scheduler.start()
