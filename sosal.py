@@ -1,4 +1,5 @@
 import random
+import telegram
 import os
 import asyncio
 from telegram.ext import Application, MessageHandler, filters
