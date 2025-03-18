@@ -1,5 +1,6 @@
 import random
 import os
+import asyncio
 from telegram.ext import Application, MessageHandler, filters
 from openai import OpenAI
 from datetime import datetime
@@ -76,7 +77,7 @@ async def get_crypto_prices():
             return "Нет данных", "Нет данных"
 
 # Функция для отправки утреннего сообщения
-async def send_morning_message(context):
+async def send_morning_message(application):
     cities = {
         "Минск": "Minsk,BY",
         "Жлобин": "Zhlobin,BY",
@@ -114,7 +115,7 @@ async def send_morning_message(context):
         f"🌍 *WLD*: ${wld_price_usd:.2f} USD | {wld_price_byn:.2f} BYN"
     )
     
-    await context.bot.send_message(chat_id=CHAT_ID, text=message, parse_mode='Markdown')
+    await application.bot.send_message(chat_id=CHAT_ID, text=message, parse_mode='Markdown')
 
 # Асинхронная функция обработки сообщений
 async def handle_message(update, context):
@@ -187,6 +188,7 @@ async def main():
 
     # Инициализируем приложение
     await application.initialize()
+    await application.start()
 
     # Настройка планировщика
     scheduler = AsyncIOScheduler()
@@ -200,9 +202,11 @@ async def main():
 
     # Запускаем polling
     try:
-        await application.run_polling()
+        await application.run_polling(allowed_updates=filters.Update.ALL)
     finally:
+        await application.stop()
         await application.shutdown()
 
 if __name__ == '__main__':
-    asyncio.run(main())
+    loop = asyncio.get_event_loop()
+    loop.run_until_complete(main())
