@@ -5,10 +5,10 @@ import os
 # Токен берется из переменной окружения для безопасности
 TOKEN = os.getenv('TELEGRAM_TOKEN')
 
-# Список возможных ответов для "сосал?" (основные)
+# Список возможных ответов для "сосал?" и "sosal?"
 RESPONSES_SOSAL = ['да', 'было', 'ну сосал', 'прям ща']
 
-# Редкий ответ для "сосал?" (10% шанс)
+# Редкий ответ для "сосал?" и "sosal?" (10% шанс)
 RARE_RESPONSE_SOSAL = 'пошел нахуй'
 
 # Ответ для "летал?"
@@ -21,7 +21,8 @@ RESPONSES_SCAMIL = ['да', 'было', 'с кайфом']
 async def handle_message(update, context):
     message_text = update.message.text.lower()
     
-    if message_text == 'сосал?':
+    # Реакция на "сосал?" или "sosal?"
+    if message_text in ['сосал?', 'sosal?']:
         # Генерируем случайное число от 0 до 1
         if random.random() < 0.1:  # 10% шанс
             await update.message.reply_text(RARE_RESPONSE_SOSAL)
@@ -29,9 +30,11 @@ async def handle_message(update, context):
             random_response = random.choice(RESPONSES_SOSAL)
             await update.message.reply_text(random_response)
     
+    # Реакция на "летал?"
     elif message_text == 'летал?':
         await update.message.reply_text(RESPONSE_LETAL)
     
+    # Реакция на "скамил?"
     elif message_text == 'скамил?':
         random_response = random.choice(RESPONSES_SCAMIL)
         await update.message.reply_text(random_response)
