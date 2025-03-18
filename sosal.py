@@ -1,32 +1,38 @@
 import random
-from telegram.ext import Application, MessageHandler, filters
 import os
+from telegram.ext import Application, MessageHandler, filters
+from openai import OpenAI
 
-# Токен берется из переменной окружения для безопасности
-TOKEN = os.getenv('TELEGRAM_TOKEN')
+# Токен Telegram бота и API-ключ DeepSeek из переменных окружения
+TELEGRAM_TOKEN = os.getenv('TELEGRAM_TOKEN')
+DEEPSEEK_API_KEY = os.getenv('DEEPSEEK_API_KEY')
 
-# Список возможных ответов для "сосал?" и "sosal?"
+# Настройка клиента DeepSeek API
+deepseek_client = OpenAI(
+    api_key=DEEPSEEK_API_KEY,
+    base_url="https://api.deepseek.com"
+)
+
+# Список ответов для "сосал?" и "sosal?"
 RESPONSES_SOSAL = ['да', 'было', 'ну сосал', 'прям ща']
-
-# Редкий ответ для "сосал?" и "sosal?" (10% шанс)
 RARE_RESPONSE_SOSAL = 'пошел нахуй'
 
 # Ответ для "летал?"
 RESPONSE_LETAL = 'да'
 
-# Список возможных ответов для "скамил?"
+# Список ответов для "скамил?"
 RESPONSES_SCAMIL = ['да', 'было', 'с кайфом']
 
 # Асинхронная функция обработки сообщений
 async def handle_message(update, context):
     message_text = update.message.text.lower()
-    
+    bot_username = f"@{context.bot.username.lower()}"  # Получаем имя бота (например, @YourBotName)
+
     # Реакция на "сосал?" или "sosal?"
-    if message_text in ['сосал?', 'sosal?', 'сасал?']:
-        # Генерируем случайное число от 0 до 1
+    if message_text in ['сосал?', 'sosal?']:
         if random.random() < 0.1:  # 10% шанс
             await update.message.reply_text(RARE_RESPONSE_SOSAL)
-        else:  # 90% шанс
+        else:
             random_response = random.choice(RESPONSES_SOSAL)
             await update.message.reply_text(random_response)
     
@@ -38,10 +44,34 @@ async def handle_message(update, context):
     elif message_text == 'скамил?':
         random_response = random.choice(RESPONSES_SCAMIL)
         await update.message.reply_text(random_response)
+    
+    # Реакция только на сообщения с упоминанием бота (например, @YourBotName)
+    elif bot_username in message_text:
+        # Убираем имя бота из текста для обработки DeepSeek
+        query = message_text.replace(bot_username, "").strip()
+        if not query:  # Если после удаления тега ничего не осталось
+            await update.message.reply_text("Что ты хочешь узнать?")
+            return
+        
+        try:
+            # Отправляем запрос к DeepSeek API
+            response = deepseek_client.chat.completions.create(
+                model="deepseek-chat",
+                messages=[
+                    {"role": "system", "content": "Ты полезный ИИ-агент в Telegram-группе. Отвечай кратко и по делу."},
+                    {"role": "user", "content": query}
+                ],
+                max_tokens=500,
+                temperature=0.7
+            )
+            ai_response = response.choices[0].message.content
+            await update.message.reply_text(ai_response)
+        except Exception as e:
+            await update.message.reply_text(f"Ошибка: {str(e)}")
 
 def main():
-    # Создаем объект Application с увеличенным временем ожидания
-    application = Application.builder().token(TOKEN).read_timeout(30).build()
+    # Создаем объект Application для Telegram
+    application = Application.builder().token(TELEGRAM_TOKEN).read_timeout(30).build()
     
     # Регистрируем обработчик текстовых сообщений
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
