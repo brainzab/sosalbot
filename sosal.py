@@ -14,14 +14,14 @@ import pytz
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# Токен Telegram бота и API-ключи из переменных окружения1
+# Токен Telegram бота и API-ключи из переменных окружения
 TELEGRAM_TOKEN = os.getenv('TELEGRAM_TOKEN')
 DEEPSEEK_API_KEY = os.getenv('DEEPSEEK_API_KEY')
 OPENWEATHER_API_KEY = os.getenv('OPENWEATHER_API_KEY')
 CHAT_ID = os.getenv('CHAT_ID')
 
 # Версия кода для проверки
-CODE_VERSION = "1.4"
+CODE_VERSION = "1.5"
 
 # Настройка клиента DeepSeek API
 deepseek_client = OpenAI(
@@ -192,6 +192,26 @@ async def handle_message(update, context):
         except Exception as e:
             await message.reply_text(f"Ошибка, ёбана: {str(e)}")
 
+# Функция для запуска планировщика
+async def run_scheduler(application):
+    scheduler = AsyncIOScheduler()
+    moscow_tz = pytz.timezone('Europe/Moscow')
+    scheduler.add_job(
+        send_morning_message,
+        trigger=CronTrigger(hour=7, minute=30, timezone=moscow_tz),
+        args=[application]
+    )
+    scheduler.start()
+    logger.info("Планировщик запущен")
+    # Держим задачу живой
+    try:
+        while True:
+            await asyncio.sleep(3600)  # Спим 1 час, чтобы не завершать задачу
+    except asyncio.CancelledError:
+        scheduler.shutdown()
+        logger.info("Планировщик остановлен")
+
+# Основная функция
 async def main():
     # Логируем версию кода
     logger.info(f"Запуск бота, версия кода: {CODE_VERSION}")
@@ -205,24 +225,19 @@ async def main():
     await application.start()
     logger.info("Бот полностью запущен")
 
-    # Настройка планировщика
-    scheduler = AsyncIOScheduler()
-    moscow_tz = pytz.timezone('Europe/Moscow')
-    scheduler.add_job(
-        send_morning_message,
-        trigger=CronTrigger(hour=7, minute=30, timezone=moscow_tz),
-        args=[application]
-    )
-    scheduler.start()
-    logger.info("Планировщик запущен")
+    # Запускаем планировщик в отдельной задаче
+    scheduler_task = asyncio.create_task(run_scheduler(application))
 
-    # Запускаем polling и обрабатываем завершение
+    # Запускаем polling
     try:
         await application.run_polling()
     except Exception as e:
         logger.error(f"Ошибка в run_polling: {e}")
-        raise  # Поднимаем исключение для полной трассировки
+        raise
     finally:
+        # Останавливаем планировщик и приложение
+        scheduler_task.cancel()
+        await asyncio.sleep(1)  # Даём время на завершение
         await application.stop()
         await application.shutdown()
         logger.info("Бот остановлен")
