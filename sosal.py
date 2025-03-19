@@ -2,16 +2,16 @@ import random
 import os
 import asyncio
 import logging
-from telegram import Update
-from telegram.ext import Application, CommandHandler, MessageHandler as TelegramMessageHandler, filters
-from telegram.constants import ParseMode
+import sys
+from datetime import datetime
+from aiogram import Bot, Dispatcher, types
+from aiogram.filters import Command, Text
+from aiogram.types import ReactionTypeEmoji
 from openai import AsyncOpenAI
 import aiohttp
-from datetime import datetime
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.cron import CronTrigger
 import pytz
-import sys
 
 # Настройка логирования
 logging.basicConfig(
@@ -36,7 +36,7 @@ def get_env_var(var_name, default=None):
 TELEGRAM_TOKEN = get_env_var('TELEGRAM_TOKEN')
 DEEPSEEK_API_KEY = get_env_var('DEEPSEEK_API_KEY')
 OPENWEATHER_API_KEY = get_env_var('OPENWEATHER_API_KEY')
-CHAT_ID = get_env_var('CHAT_ID')
+CHAT_ID = int(get_env_var('CHAT_ID'))  # Преобразуем в int для aiogram
 
 # Настройка клиента DeepSeek
 deepseek_client = AsyncOpenAI(
@@ -52,13 +52,12 @@ RESPONSES_SCAMIL = ['да', 'было', 'с кайфом']
 
 # ID пользователя для реакции
 TARGET_USER_ID = 660949286
-TARGET_REACTION = [{"type": "emoji", "emoji": "😁"}]
+TARGET_REACTION = ReactionTypeEmoji(emoji="😁")
 
 # Класс для всех API-запросов
 class ApiClient:
     @staticmethod
     async def get_weather(city):
-        """Получение погоды из OpenWeatherMap"""
         url = f"http://api.openweathermap.org/data/2.5/weather?q={city}&appid={OPENWEATHER_API_KEY}&units=metric&lang=ru"
         try:
             async with aiohttp.ClientSession() as session:
@@ -77,7 +76,6 @@ class ApiClient:
 
     @staticmethod
     async def get_currency_rates():
-        """Получение курсов валют"""
         url = "https://cdn.jsdelivr.net/npm/@fawazahmed0/currency-api@latest/v1/currencies/usd.json"
         try:
             async with aiohttp.ClientSession() as session:
@@ -96,7 +94,6 @@ class ApiClient:
 
     @staticmethod
     async def get_crypto_prices():
-        """Получение цен на криптовалюты"""
         url = "https://api.coingecko.com/api/v3/simple/price?ids=bitcoin,worldcoin&vs_currencies=usd"
         try:
             async with aiohttp.ClientSession() as session:
@@ -117,7 +114,6 @@ class ApiClient:
 class AiHandler:
     @staticmethod
     async def get_ai_response(query):
-        """Получение ответа от DeepSeek AI"""
         try:
             response = await deepseek_client.chat.completions.create(
                 model="deepseek-chat",
@@ -133,81 +129,12 @@ class AiHandler:
             logger.error(f"Ошибка при получении ответа от AI: {e}")
             return f"Ошибка, ёбана: {str(e)}"
 
-# Класс для обработки команд и сообщений (переименован, чтобы избежать конфликта)
-class BotMessageHandler:
-    def __init__(self, application):
-        self.application = application
-
-    async def handle_message(self, update: Update, context):
-        """Обработка входящих сообщений"""
-        try:
-            message = update.message
-            if not message or not message.from_user:
-                return
-
-            message_text = message.text.lower() if message.text else ""
-            bot_username = f"@{context.bot.username.lower()}" if context.bot and context.bot.username else ""
-
-            # Логирование сообщений
-            logger.info(f"Сообщение от {message.from_user.id}: {message.text or 'Без текста'}")
-
-            # Реакция на сообщения целевого пользователя
-            if message.from_user.id == TARGET_USER_ID:
-                try:
-                    await context.bot.set_message_reaction(
-                        chat_id=message.chat_id,
-                        message_id=message.message_id,
-                        reaction=TARGET_REACTION
-                    )
-                except Exception as e:
-                    logger.error(f"Ошибка при установке реакции: {e}")
-
-            # Обработка специальных сообщений
-            if message_text in ['сосал?', 'sosal?']:
-                if random.random() < 0.1:
-                    await message.reply_text(RARE_RESPONSE_SOSAL)
-                else:
-                    random_response = random.choice(RESPONSES_SOSAL)
-                    await message.reply_text(random_response)
-            elif message_text == 'летал?':
-                await message.reply_text(RESPONSE_LETAL)
-            elif message_text == 'скамил?':
-                random_response = random.choice(RESPONSES_SCAMIL)
-                await message.reply_text(random_response)
-            # Обработка сообщений с упоминанием бота
-            elif message_text and bot_username and bot_username in message_text:
-                query = message_text.replace(bot_username, "").strip()
-                if not query:
-                    await message.reply_text("И хуле ты меня тегнул, петушара?")
-                    return
-                
-                # Проверка на специальные запросы
-                current_year = datetime.now().year
-                if "год" in query or "сейчас" in query or "дата" in query:
-                    await message.reply_text(f"Сейчас {current_year} год, мудила. Чё, календарь потерял?")
-                    return
-                
-                # Получение ответа от AI
-                ai_response = await AiHandler.get_ai_response(query)
-                await message.reply_text(ai_response)
-        except Exception as e:
-            logger.error(f"Ошибка в обработке сообщения: {e}")
-
-    async def command_start(self, update: Update, context):
-        """Обработка команды /start"""
-        await update.message.reply_text("Привет, я бот версии " + CODE_VERSION)
-
-    async def command_version(self, update: Update, context):
-        """Обработка команды /version"""
-        await update.message.reply_text(f"Версия бота: {CODE_VERSION}")
-
 # Класс для отправки утренних сообщений
 class MorningMessageSender:
-    def __init__(self, application):
-        self.application = application
+    def __init__(self, bot):
+        self.bot = bot
 
     async def send_morning_message(self):
-        """Отправка утреннего сообщения"""
         logger.info("Подготовка утреннего сообщения")
         try:
             cities = {
@@ -219,16 +146,13 @@ class MorningMessageSender:
                 "Ноябрьск": "Noyabrsk,RU"
             }
             
-            # Получаем данные по погоде
             weather_data = {}
             for city_name, city_code in cities.items():
                 weather_data[city_name] = await ApiClient.get_weather(city_code)
             
-            # Получаем данные по курсам и криптовалютам
             usd_byn_rate, usd_rub_rate = await ApiClient.get_currency_rates()
             btc_price_usd, wld_price_usd = await ApiClient.get_crypto_prices()
             
-            # Расчет стоимости в BYN
             try:
                 btc_price_byn = float(btc_price_usd) * float(usd_byn_rate) if btc_price_usd and usd_byn_rate else 0
                 wld_price_byn = float(wld_price_usd) * float(usd_byn_rate) if wld_price_usd and usd_byn_rate else 0
@@ -236,7 +160,6 @@ class MorningMessageSender:
                 btc_price_byn = 0
                 wld_price_byn = 0
 
-            # Формируем сообщение
             message = (
                 "Родные мои, всем доброе утро и хорошего дня! ❤️\n\n"
                 "*Положняк по погоде:*\n"
@@ -249,7 +172,6 @@ class MorningMessageSender:
                 "*Положняк по курсам:*\n"
             )
             
-            # Добавляем курсы валют и криптовалют, если они доступны
             if usd_byn_rate:
                 message += f"💵 *USD/BYN*: {usd_byn_rate:.2f} BYN\n"
             if usd_rub_rate:
@@ -265,108 +187,138 @@ class MorningMessageSender:
                     message += f" | {wld_price_byn:.2f} BYN"
                 message += "\n"
             
-            # Отправляем сообщение
-            await self.application.bot.send_message(
-                chat_id=CHAT_ID, 
-                text=message, 
-                parse_mode=ParseMode.MARKDOWN
+            await self.bot.send_message(
+                chat_id=CHAT_ID,
+                text=message,
+                parse_mode=types.ParseMode.MARKDOWN
             )
             logger.info("Утреннее сообщение отправлено")
         except Exception as e:
             logger.error(f"Ошибка при отправке утреннего сообщения: {e}")
 
-# Класс для управления приложением бота
+# Основной класс бота
 class BotApp:
     def __init__(self):
-        self.application = None
+        self.bot = Bot(token=TELEGRAM_TOKEN)
+        self.dp = Dispatcher(self.bot)
         self.scheduler = None
-        self.message_handler = None
         self.morning_sender = None
         self.keep_alive_task = None
 
     async def keep_alive(self):
-        """Функция для поддержания активности приложения"""
         while True:
             logger.info("Бот активен")
-            await asyncio.sleep(300)  # Каждые 5 минут
+            await asyncio.sleep(300)
 
-    async def start(self):
-        """Запуск бота"""
-        try:
-            logger.info(f"Запуск бота версии {CODE_VERSION}")
-            
-            # Создаем экземпляр приложения
-            self.application = Application.builder().token(TELEGRAM_TOKEN).build()
-            
-            # Создаем экземпляры обработчиков
-            self.message_handler = BotMessageHandler(self.application)
-            self.morning_sender = MorningMessageSender(self.application)
-            
-            # Регистрируем обработчики
-            self.application.add_handler(CommandHandler("start", self.message_handler.command_start))
-            self.application.add_handler(CommandHandler("version", self.message_handler.command_version))
-            self.application.add_handler(TelegramMessageHandler(filters.TEXT & ~filters.COMMAND, self.message_handler.handle_message))
-            
-            # Создаем и запускаем планировщик
-            self.scheduler = AsyncIOScheduler()
-            moscow_tz = pytz.timezone('Europe/Moscow')
-            self.scheduler.add_job(
-                self.morning_sender.send_morning_message,
-                trigger=CronTrigger(hour=7, minute=30, timezone=moscow_tz)
-            )
-            self.scheduler.start()
-            logger.info("Планировщик запущен")
-            
-            # Запускаем задачу для поддержания активности
-            self.keep_alive_task = asyncio.create_task(self.keep_alive())
-            
-            # Запускаем polling - это блокирующая операция, которая должна идти последней
-            await self.application.run_polling(allowed_updates=Update.ALL_TYPES, drop_pending_updates=True)
-            
-            logger.info("Бот успешно запущен")
-        except Exception as e:
-            logger.error(f"Ошибка при запуске бота: {e}")
+    async def on_startup(self):
+        logger.info(f"Запуск бота версии {CODE_VERSION}")
+        self.morning_sender = MorningMessageSender(self.bot)
+        self.scheduler = AsyncIOScheduler()
+        moscow_tz = pytz.timezone('Europe/Moscow')
+        self.scheduler.add_job(
+            self.morning_sender.send_morning_message,
+            trigger=CronTrigger(hour=7, minute=30, timezone=moscow_tz)
+        )
+        self.scheduler.start()
+        logger.info("Планировщик запущен")
+        self.keep_alive_task = asyncio.create_task(self.keep_alive())
 
-    async def stop(self):
-        """Остановка бота"""
+    async def on_shutdown(self):
         logger.info("Остановка бота")
-        
-        # Останавливаем задачу поддержания активности
         if self.keep_alive_task and not self.keep_alive_task.done():
             self.keep_alive_task.cancel()
             try:
                 await self.keep_alive_task
             except asyncio.CancelledError:
                 pass
-        
-        # Останавливаем планировщик
         if self.scheduler:
             self.scheduler.shutdown()
             logger.info("Планировщик остановлен")
-        
-        # Останавливаем приложение
-        if self.application:
-            await self.application.stop()
-            await self.application.shutdown()
-            logger.info("Приложение остановлено")
+        await self.bot.session.close()
+        logger.info("Бот остановлен")
 
-# Основная функция
+    # Обработчики команд
+    @staticmethod
+    async def command_start(message: types.Message):
+        await message.reply(f"Привет, я бот версии {CODE_VERSION}")
+
+    @staticmethod
+    async def command_version(message: types.Message):
+        await message.reply(f"Версия бота: {CODE_VERSION}")
+
+    # Обработчик текстовых сообщений
+    async def handle_message(self, message: types.Message):
+        try:
+            if not message.from_user:
+                return
+
+            message_text = message.text.lower() if message.text else ""
+            bot_info = await self.bot.get_me()
+            bot_username = f"@{bot_info.username.lower()}"
+
+            logger.info(f"Сообщение от {message.from_user.id}: {message.text or 'Без текста'}")
+
+            if message.from_user.id == TARGET_USER_ID:
+                try:
+                    await self.bot.set_message_reaction(
+                        chat_id=message.chat_id,
+                        message_id=message.message_id,
+                        reaction=[TARGET_REACTION]
+                    )
+                except Exception as e:
+                    logger.error(f"Ошибка при установке реакции: {e}")
+
+            if message_text in ['сосал?', 'sosal?']:
+                if random.random() < 0.1:
+                    await message.reply(RARE_RESPONSE_SOSAL)
+                else:
+                    random_response = random.choice(RESPONSES_SOSAL)
+                    await message.reply(random_response)
+            elif message_text == 'летал?':
+                await message.reply(RESPONSE_LETAL)
+            elif message_text == 'скамил?':
+                random_response = random.choice(RESPONSES_SCAMIL)
+                await message.reply(random_response)
+            elif message_text and bot_username in message_text:
+                query = message_text.replace(bot_username, "").strip()
+                if not query:
+                    await message.reply("И хуле ты меня тегнул, петушара?")
+                    return
+                
+                current_year = datetime.now().year
+                if "год" in query or "сейчас" in query or "дата" in query:
+                    await message.reply(f"Сейчас {current_year} год, мудила. Чё, календарь потерял?")
+                    return
+                
+                ai_response = await AiHandler.get_ai_response(query)
+                await message.reply(ai_response)
+        except Exception as e:
+            logger.error(f"Ошибка в обработке сообщения: {e}")
+
+    def setup_handlers(self):
+        self.dp.message.register(self.command_start, Command("start"))
+        self.dp.message.register(self.command_version, Command("version"))
+        self.dp.message.register(self.handle_message, Text())
+
+    async def start(self):
+        self.setup_handlers()
+        await self.on_startup()
+        try:
+            await self.dp.start_polling(allowed_updates=types.Update.ALL_TYPES)
+        finally:
+            await self.on_shutdown()
+
+# Запуск приложения
 async def main():
-    """Главная функция запуска бота"""
-    bot = BotApp()
+    bot_app = BotApp()
     try:
         logger.info("Запуск бота...")
-        await bot.start()
+        await bot_app.start()
     except (KeyboardInterrupt, SystemExit):
         logger.info("Получен сигнал остановки")
     except Exception as e:
         logger.error(f"Необработанная ошибка в main: {e}")
-    finally:
-        # Остановка бота в блоке finally всегда выполняется
-        await bot.stop()
-        logger.info("Бот остановлен")
 
-# Запуск приложения
 if __name__ == "__main__":
     print(f"Старт приложения. Версия: {CODE_VERSION}")
     asyncio.run(main())
