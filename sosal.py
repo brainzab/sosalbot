@@ -23,7 +23,7 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 # Версия кода
-CODE_VERSION = "2.5"
+CODE_VERSION = "2.6"
 
 # Получение переменных окружения
 def get_env_var(var_name, default=None):
@@ -159,25 +159,6 @@ class ApiClient:
             logger.error(f"Исключение при запросе событий матча: {e}")
             return None
 
-    @staticmethod
-    async def get_live_matches():
-        url = "https://api-football-v1.p.rapidapi.com/v3/fixtures?live=all"
-        headers = {
-            "X-RapidAPI-Key": RAPIDAPI_KEY,
-            "X-RapidAPI-Host": "api-football-v1.p.rapidapi.com"
-        }
-        try:
-            async with aiohttp.ClientSession() as session:
-                async with session.get(url, headers=headers) as response:
-                    if response.status == 200:
-                        return await response.json()
-                    else:
-                        logger.error(f"Ошибка API-Football для live-матчей: {response.status}")
-                        return None
-        except Exception as e:
-            logger.error(f"Исключение при запросе live-матчей: {e}")
-            return None
-
 # Класс для работы с AI
 class AiHandler:
     @staticmethod
@@ -264,41 +245,6 @@ class MorningMessageSender:
         except Exception as e:
             logger.error(f"Ошибка при отправке утреннего сообщения: {e}")
 
-# Класс для проверки голов в live-матчах
-class GoalChecker:
-    def __init__(self, bot):
-        self.bot = bot
-        self.last_goals = {}
-
-    async def check_live_goals(self):
-        data = await ApiClient.get_live_matches()
-        if not data or not data.get("response"):
-            return
-
-        for fixture in data["response"]:
-            fixture_id = fixture["fixture"]["id"]
-            home_team_id = fixture["teams"]["home"]["id"]
-            away_team_id = fixture["teams"]["away"]["id"]
-            if home_team_id not in TEAM_IDS.values() and away_team_id not in TEAM_IDS.values():
-                continue
-
-            home_team = fixture["teams"]["home"]["name"]
-            away_team = fixture["teams"]["away"]["name"]
-            events = fixture.get("events", [])
-            last_goals = self.last_goals.get(fixture_id, [])
-
-            for event in events:
-                if event["type"] == "Goal" and event not in last_goals:
-                    scorer = event["player"]["name"]
-                    minute = event["time"]["elapsed"]
-                    team_scored = event["team"]["name"]
-                    emoji = "⚽️🔥" if team_scored in [home_team, away_team] else "⚽️"
-                    message = f"Гол! {scorer} забил на {minute} минуте в матче {home_team} vs {away_team}! {emoji}"
-                    await self.bot.send_message(chat_id=CHAT_ID, text=message)
-                    logger.info(f"Уведомление о голе отправлено: {message}")
-
-            self.last_goals[fixture_id] = events
-
 # Основной класс бота
 class BotApp:
     def __init__(self):
@@ -306,7 +252,6 @@ class BotApp:
         self.dp = Dispatcher()
         self.scheduler = None
         self.morning_sender = None
-        self.goal_checker = None
         self.keep_alive_task = None
 
     async def keep_alive(self):
@@ -317,17 +262,11 @@ class BotApp:
     async def on_startup(self):
         logger.info(f"Запуск бота версии {CODE_VERSION}")
         self.morning_sender = MorningMessageSender(self.bot)
-        self.goal_checker = GoalChecker(self.bot)
         self.scheduler = AsyncIOScheduler()
         moscow_tz = pytz.timezone('Europe/Moscow')
         self.scheduler.add_job(
             self.morning_sender.send_morning_message,
             trigger=CronTrigger(hour=7, minute=30, timezone=moscow_tz)
-        )
-        self.scheduler.add_job(
-            self.goal_checker.check_live_goals,
-            trigger='interval',
-            seconds=60
         )
         self.scheduler.start()
         logger.info("Планировщик запущен")
@@ -375,13 +314,11 @@ class BotApp:
             away_goals = fixture["goals"]["away"] if fixture["goals"]["away"] is not None else 0
             date = fixture["fixture"]["date"].split("T")[0]
             
-            # Определяем результат для команды
             if fixture["teams"]["home"]["id"] == team_id:
                 result_icon = "🟢" if home_goals > away_goals else "🔴" if home_goals < away_goals else "🟡"
             else:
                 result_icon = "🟢" if away_goals > home_goals else "🔴" if away_goals < home_goals else "🟡"
 
-            # Получаем события матча
             events_data = await ApiClient.get_match_events(fixture_id)
             goals_str = "Голы: "
             if events_data and events_data.get("response"):
