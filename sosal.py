@@ -22,7 +22,7 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 # Версия кода
-CODE_VERSION = "2.2"
+CODE_VERSION = "2.3"
 
 # Получение переменных окружения
 def get_env_var(var_name, default=None):
@@ -290,42 +290,42 @@ class BotApp:
             logger.info("Бот активен")
             await asyncio.sleep(300)  # Каждые 5 минут
 
-async def start(self):
-    """Запуск бота"""
-    try:
-        logger.info(f"Запуск бота версии {CODE_VERSION}")
-        
-        # Создаем экземпляр приложения
-        self.application = Application.builder().token(TELEGRAM_TOKEN).build()
-        
-        # Создаем экземпляры обработчиков
-        self.message_handler = BotMessageHandler(self.application)
-        self.morning_sender = MorningMessageSender(self.application)
-        
-        # Регистрируем обработчики
-        self.application.add_handler(CommandHandler("start", self.message_handler.command_start))
-        self.application.add_handler(CommandHandler("version", self.message_handler.command_version))
-        self.application.add_handler(TelegramMessageHandler(filters.TEXT & ~filters.COMMAND, self.message_handler.handle_message))
-        
-        # Создаем и запускаем планировщик
-        self.scheduler = AsyncIOScheduler()
-        moscow_tz = pytz.timezone('Europe/Moscow')
-        self.scheduler.add_job(
-            self.morning_sender.send_morning_message,
-            trigger=CronTrigger(hour=7, minute=30, timezone=moscow_tz)
-        )
-        self.scheduler.start()
-        logger.info("Планировщик запущен")
-        
-        # Запускаем задачу для поддержания активности
-        self.keep_alive_task = asyncio.create_task(self.keep_alive())
-        
-        # Запускаем polling - это блокирующая операция, которая должна идти последней
-        await self.application.run_polling(allowed_updates=Update.ALL_TYPES, drop_pending_updates=True)
-        
-        logger.info("Бот успешно запущен")
-    except Exception as e:
-        logger.error(f"Ошибка при запуске бота: {e}")
+    async def start(self):
+        """Запуск бота"""
+        try:
+            logger.info(f"Запуск бота версии {CODE_VERSION}")
+            
+            # Создаем экземпляр приложения
+            self.application = Application.builder().token(TELEGRAM_TOKEN).build()
+            
+            # Создаем экземпляры обработчиков
+            self.message_handler = BotMessageHandler(self.application)
+            self.morning_sender = MorningMessageSender(self.application)
+            
+            # Регистрируем обработчики
+            self.application.add_handler(CommandHandler("start", self.message_handler.command_start))
+            self.application.add_handler(CommandHandler("version", self.message_handler.command_version))
+            self.application.add_handler(TelegramMessageHandler(filters.TEXT & ~filters.COMMAND, self.message_handler.handle_message))
+            
+            # Создаем и запускаем планировщик
+            self.scheduler = AsyncIOScheduler()
+            moscow_tz = pytz.timezone('Europe/Moscow')
+            self.scheduler.add_job(
+                self.morning_sender.send_morning_message,
+                trigger=CronTrigger(hour=7, minute=30, timezone=moscow_tz)
+            )
+            self.scheduler.start()
+            logger.info("Планировщик запущен")
+            
+            # Запускаем задачу для поддержания активности
+            self.keep_alive_task = asyncio.create_task(self.keep_alive())
+            
+            # Запускаем polling - это блокирующая операция, которая должна идти последней
+            await self.application.run_polling(allowed_updates=Update.ALL_TYPES, drop_pending_updates=True)
+            
+            logger.info("Бот успешно запущен")
+        except Exception as e:
+            logger.error(f"Ошибка при запуске бота: {e}")
 
     async def stop(self):
         """Остановка бота"""
