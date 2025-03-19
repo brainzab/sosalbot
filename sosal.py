@@ -166,8 +166,8 @@ class AiHandler:
             response = await deepseek_client.chat.completions.create(
                 model="deepseek-chat",
                 messages=messages,
-                max_tokens=999,  # Увеличено тобой
-                temperature=1.5  # Увеличено тобой для большего хаоса
+                max_tokens=999,
+                temperature=1.5
             )
             return response.choices[0].message.content
         except Exception as e:
@@ -243,7 +243,7 @@ class BotApp:
         self.scheduler = None
         self.morning_sender = None
         self.keep_alive_task = None
-        self.chat_histories = {}  # Хранилище истории чатов
+        self.chat_histories = {}
 
     async def keep_alive(self):
         while True:
@@ -370,11 +370,6 @@ class BotApp:
                     await message.reply("И хуле ты мне пишешь пустоту, петушара?")
                     return
                 
-                current_year = datetime.now().year
-                if "год" in query or "сейчас" in query or "дата" in query:
-                    await message.reply(f"Сейчас {current_year} год, мудила. Чё, календарь потерял?")
-                    return
-                
                 chat_id = message.chat.id
                 if chat_id not in self.chat_histories:
                     self.chat_histories[chat_id] = []
@@ -388,7 +383,7 @@ class BotApp:
                 self.chat_histories[chat_id].append({"role": "user", "content": query})
                 self.chat_histories[chat_id].append({"role": "assistant", "content": ai_response})
                 
-                if len(self.chat_histories[chat_id]) > 30:  # Увеличено тобой
+                if len(self.chat_histories[chat_id]) > 30:
                     self.chat_histories[chat_id] = self.chat_histories[chat_id][-30:]
                 
                 await message.reply(ai_response)
