@@ -37,7 +37,7 @@ def get_env_var(var_name, default=None):
 TELEGRAM_TOKEN = get_env_var('TELEGRAM_TOKEN')
 DEEPSEEK_API_KEY = get_env_var('DEEPSEEK_API_KEY')
 OPENWEATHER_API_KEY = get_env_var('OPENWEATHER_API_KEY')
-RAPIDAPI_KEY = get_env_var('RAPIDAPI_KEY')  # Ключ от RapidAPI
+RAPIDAPI_KEY = get_env_var('RAPIDAPI_KEY')
 CHAT_ID = int(get_env_var('CHAT_ID'))
 
 # Настройка клиента DeepSeek
@@ -130,14 +130,33 @@ class ApiClient:
             async with aiohttp.ClientSession() as session:
                 async with session.get(url, headers=headers) as response:
                     if response.status == 200:
-                        data = await response.json()
-                        logger.info(f"Ответ API-Football для команды {team_id}: {data}")
-                        return data
+                        return await response.json()
                     else:
                         logger.error(f"Ошибка API-Football для команды {team_id}: {response.status}")
                         return None
         except Exception as e:
             logger.error(f"Исключение при запросе матчей: {e}")
+            return None
+
+    @staticmethod
+    async def get_match_events(fixture_id):
+        url = f"https://api-football-v1.p.rapidapi.com/v3/fixtures/events?fixture={fixture_id}"
+        headers = {
+            "X-RapidAPI-Key": RAPIDAPI_KEY,
+            "X-RapidAPI-Host": "api-football-v1.p.rapidapi.com"
+        }
+        try:
+            async with aiohttp.ClientSession() as session:
+                async with session.get(url, headers=headers) as response:
+                    if response.status == 200:
+                        data = await response.json()
+                        logger.info(f"События для матча {fixture_id}: {data}")
+                        return data
+                    else:
+                        logger.error(f"Ошибка API-Football для событий матча {fixture_id}: {response.status}")
+                        return None
+        except Exception as e:
+            logger.error(f"Исключение при запросе событий матча: {e}")
             return None
 
     @staticmethod
@@ -151,8 +170,7 @@ class ApiClient:
             async with aiohttp.ClientSession() as session:
                 async with session.get(url, headers=headers) as response:
                     if response.status == 200:
-                        data = await response.json()
-                        return data
+                        return await response.json()
                     else:
                         logger.error(f"Ошибка API-Football для live-матчей: {response.status}")
                         return None
@@ -350,6 +368,7 @@ class BotApp:
 
         response = f"Последние 5 матчей {team_name.upper()}:\n\n"
         for fixture in data["response"]:
+            fixture_id = fixture["fixture"]["id"]
             home_team = fixture["teams"]["home"]["name"]
             away_team = fixture["teams"]["away"]["name"]
             home_goals = fixture["goals"]["home"] if fixture["goals"]["home"] is not None else 0
@@ -362,14 +381,17 @@ class BotApp:
             else:
                 result_icon = "🟢" if away_goals > home_goals else "🔴" if away_goals < home_goals else "🟡"
 
-            # Голы
+            # Получаем события матча
+            events_data = await ApiClient.get_match_events(fixture_id)
             goals_str = "Голы: "
-            events = fixture.get("events", [])
-            goal_events = [e for e in events if e["type"] == "Goal"]
-            if goal_events:
-                goals_str += ", ".join([f"{e['player']['name']} ({e['time']['elapsed']}')" for e in goal_events])
+            if events_data and events_data.get("response"):
+                goal_events = [e for e in events_data["response"] if e["type"] == "Goal"]
+                if goal_events:
+                    goals_str += ", ".join([f"{e['player']['name']} ({e['time']['elapsed']}')" for e in goal_events])
+                else:
+                    goals_str += "Нет данных о голах"
             else:
-                goals_str += "Нет данных о голах"
+                goals_str += "Ошибка получения событий"
 
             response += f"{result_icon} {date}: {home_team} {home_goals} - {away_goals} {away_team}\n{goals_str}\n\n"
 
