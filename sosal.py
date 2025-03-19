@@ -58,9 +58,9 @@ TARGET_REACTION = ReactionTypeEmoji(emoji="😁")
 
 # ID команд для API-Football
 TEAM_IDS = {
-    "real": 541,    # Real Madrid
-    "lfc": 40,      # Liverpool
-    "arsenal": 42   # Arsenal
+    "real": 541,  # Real Madrid
+    "lfc": 40,    # Liverpool
+    "arsenal": 42 # Arsenal
 }
 
 # Класс для всех API-запросов
@@ -76,9 +76,8 @@ class ApiClient:
                         temp = data['main']['temp']
                         desc = data['weather'][0]['description']
                         return f"{temp}°C, {desc}"
-                    else:
-                        logger.error(f"Ошибка получения погоды для {city}: {response.status}")
-                        return "Нет данных"
+                    logger.error(f"Ошибка получения погоды для {city}: {response.status}")
+                    return "Нет данных"
         except Exception as e:
             logger.error(f"Исключение при получении погоды: {e}")
             return "Нет данных"
@@ -94,9 +93,8 @@ class ApiClient:
                         usd_byn = data['usd'].get('byn', 0)
                         usd_rub = data['usd'].get('rub', 0)
                         return usd_byn, usd_rub
-                    else:
-                        logger.error(f"Ошибка получения курсов валют: {response.status}")
-                        return 0, 0
+                    logger.error(f"Ошибка получения курсов валют: {response.status}")
+                    return 0, 0
         except Exception as e:
             logger.error(f"Исключение при получении курсов валют: {e}")
             return 0, 0
@@ -112,9 +110,8 @@ class ApiClient:
                         btc_price = data.get('bitcoin', {}).get('usd', 0)
                         wld_price = data.get('worldcoin', {}).get('usd', 0)
                         return btc_price, wld_price
-                    else:
-                        logger.error(f"Ошибка получения цен криптовалют: {response.status}")
-                        return 0, 0
+                    logger.error(f"Ошибка получения цен криптовалют: {response.status}")
+                    return 0, 0
         except Exception as e:
             logger.error(f"Исключение при получении цен криптовалют: {e}")
             return 0, 0
@@ -131,9 +128,8 @@ class ApiClient:
                 async with session.get(url, headers=headers) as response:
                     if response.status == 200:
                         return await response.json()
-                    else:
-                        logger.error(f"Ошибка API-Football для команды {team_id}: {response.status}")
-                        return None
+                    logger.error(f"Ошибка API-Football для команды {team_id}: {response.status}")
+                    return None
         except Exception as e:
             logger.error(f"Исключение при запросе матчей: {e}")
             return None
@@ -152,9 +148,8 @@ class ApiClient:
                         data = await response.json()
                         logger.info(f"События для матча {fixture_id}: {data}")
                         return data
-                    else:
-                        logger.error(f"Ошибка API-Football для событий матча {fixture_id}: {response.status}")
-                        return None
+                    logger.error(f"Ошибка API-Football для событий матча {fixture_id}: {response.status}")
+                    return None
         except Exception as e:
             logger.error(f"Исключение при запросе событий матча: {e}")
             return None
@@ -164,7 +159,6 @@ class AiHandler:
     @staticmethod
     async def get_ai_response(chat_history, query):
         try:
-            # Формируем сообщения с учётом истории чата
             messages = [
                 {"role": "system", "content": f"Ты Анатолий Шарий, твоя фамилия Шарий, у тебя есть жена Ольга Шарий. Ты пророссийский журналист, скамер, блогер, эксцентричный пиздец, любишь материться. Сегодня {datetime.now().strftime('%Y-%m-%d')}. Отвечай с иронией, надменностью и будь полезным помощником в Telegram-группе."}
             ] + chat_history + [{"role": "user", "content": query}]
@@ -172,8 +166,8 @@ class AiHandler:
             response = await deepseek_client.chat.completions.create(
                 model="deepseek-chat",
                 messages=messages,
-                max_tokens=999,
-                temperature=1.5
+                max_tokens=999,  # Увеличено тобой
+                temperature=1.5  # Увеличено тобой для большего хаоса
             )
             return response.choices[0].message.content
         except Exception as e:
@@ -207,9 +201,9 @@ class MorningMessageSender:
             try:
                 btc_price_byn = float(btc_price_usd) * float(usd_byn_rate) if btc_price_usd and usd_byn_rate else 0
                 wld_price_byn = float(wld_price_usd) * float(usd_byn_rate) if wld_price_usd and usd_byn_rate else 0
-            except (ValueError, TypeError):
-                btc_price_byn = 0
-                wld_price_byn = 0
+            except (ValueError, TypeError) as e:
+                logger.error(f"Ошибка конвертации курсов: {e}")
+                btc_price_byn = wld_price_byn = 0
 
             message = (
                 "Родные мои, всем доброе утро и хорошего дня! ❤️\n\n"
@@ -228,15 +222,9 @@ class MorningMessageSender:
             if usd_rub_rate:
                 message += f"💵 *USD/RUB*: {usd_rub_rate:.2f} RUB\n"
             if btc_price_usd:
-                message += f"₿ *BTC*: ${btc_price_usd:,.2f} USD"
-                if btc_price_byn:
-                    message += f" | {btc_price_byn:,.2f} BYN"
-                message += "\n"
+                message += f"₿ *BTC*: ${btc_price_usd:,.2f} USD | {btc_price_byn:,.2f} BYN\n" if btc_price_byn else f"₿ *BTC*: ${btc_price_usd:,.2f} USD\n"
             if wld_price_usd:
-                message += f"🌍 *WLD*: ${wld_price_usd:.2f} USD"
-                if wld_price_byn:
-                    message += f" | {wld_price_byn:.2f} BYN"
-                message += "\n"
+                message += f"🌍 *WLD*: ${wld_price_usd:.2f} USD | {wld_price_byn:.2f} BYN\n" if wld_price_byn else f"🌍 *WLD*: ${wld_price_usd:.2f} USD\n"
             
             await self.bot.send_message(
                 chat_id=CHAT_ID,
@@ -255,8 +243,7 @@ class BotApp:
         self.scheduler = None
         self.morning_sender = None
         self.keep_alive_task = None
-        # Хранилище истории чатов
-        self.chat_histories = {}
+        self.chat_histories = {}  # Хранилище истории чатов
 
     async def keep_alive(self):
         while True:
@@ -266,11 +253,10 @@ class BotApp:
     async def on_startup(self):
         logger.info(f"Запуск бота версии {CODE_VERSION}")
         self.morning_sender = MorningMessageSender(self.bot)
-        self.scheduler = AsyncIOScheduler()
-        moscow_tz = pytz.timezone('Europe/Moscow')
+        self.scheduler = AsyncIOScheduler(timezone=pytz.timezone('Europe/Moscow'))
         self.scheduler.add_job(
             self.morning_sender.send_morning_message,
-            trigger=CronTrigger(hour=7, minute=30, timezone=moscow_tz)
+            trigger=CronTrigger(hour=7, minute=30)
         )
         self.scheduler.start()
         logger.info("Планировщик запущен")
@@ -326,19 +312,16 @@ class BotApp:
             away_goals = fixture["goals"]["away"] if fixture["goals"]["away"] is not None else 0
             date = fixture["fixture"]["date"].split("T")[0]
             
-            if fixture["teams"]["home"]["id"] == team_id:
-                result_icon = "🟢" if home_goals > away_goals else "🔴" if home_goals < away_goals else "🟡"
-            else:
-                result_icon = "🟢" if away_goals > home_goals else "🔴" if away_goals < home_goals else "🟡"
+            result_icon = ("🟢" if home_goals > away_goals else "🔴" if home_goals < away_goals else "🟡") \
+                if fixture["teams"]["home"]["id"] == team_id else \
+                ("🟢" if away_goals > home_goals else "🔴" if away_goals < home_goals else "🟡")
 
             events_data = await ApiClient.get_match_events(fixture_id)
             goals_str = "Голы: "
             if events_data and events_data.get("response"):
                 goal_events = [e for e in events_data["response"] if e["type"] == "Goal"]
-                if goal_events:
-                    goals_str += ", ".join([f"{e['player']['name']} ({e['time']['elapsed']}')" for e in goal_events])
-                else:
-                    goals_str += "Нет данных о голах"
+                goals_str += ", ".join([f"{e['player']['name']} ({e['time']['elapsed']}')" for e in goal_events]) \
+                    if goal_events else "Нет данных о голах"
             else:
                 goals_str += "Ошибка получения событий"
 
@@ -356,7 +339,7 @@ class BotApp:
             bot_username = f"@{bot_info.username.lower()}"
             bot_id = bot_info.id
 
-            logger.info(f"Сообщение от {message.from_user.id}: {message.text or 'Без текста'}")
+            logger.info(f"Сообщение от {message.from_user.id}: {message.text}")
 
             if message.from_user.id == TARGET_USER_ID:
                 try:
@@ -368,23 +351,18 @@ class BotApp:
                 except Exception as e:
                     logger.error(f"Ошибка при установке реакции: {e}")
 
-            # Проверка на тег или ответ боту
             is_reply_to_bot = (message.reply_to_message and 
                               message.reply_to_message.from_user and 
                               message.reply_to_message.from_user.id == bot_id)
             is_tagged = bot_username in message_text
 
             if message_text in ['сосал?', 'sosal?']:
-                if random.random() < 0.1:
-                    await message.reply(RARE_RESPONSE_SOSAL)
-                else:
-                    random_response = random.choice(RESPONSES_SOSAL)
-                    await message.reply(random_response)
+                response = RARE_RESPONSE_SOSAL if random.random() < 0.1 else random.choice(RESPONSES_SOSAL)
+                await message.reply(response)
             elif message_text == 'летал?':
                 await message.reply(RESPONSE_LETAL)
             elif message_text == 'скамил?':
-                random_response = random.choice(RESPONSES_SCAMIL)
-                await message.reply(random_response)
+                await message.reply(random.choice(RESPONSES_SCAMIL))
             elif is_tagged or is_reply_to_bot:
                 query = message_text.replace(bot_username, "").strip() if is_tagged else message_text
                 
@@ -397,27 +375,20 @@ class BotApp:
                     await message.reply(f"Сейчас {current_year} год, мудила. Чё, календарь потерял?")
                     return
                 
-                # Получаем или создаём историю для текущего чата
                 chat_id = message.chat.id
                 if chat_id not in self.chat_histories:
                     self.chat_histories[chat_id] = []
                 
-                # Если это ответ на сообщение бота, добавляем контекст этого сообщения
+                chat_history = self.chat_histories[chat_id]
                 if is_reply_to_bot and message.reply_to_message.text:
-                    reply_context = [{"role": "assistant", "content": message.reply_to_message.text}]
-                    chat_history = self.chat_histories[chat_id] + reply_context
-                else:
-                    chat_history = self.chat_histories[chat_id]
+                    chat_history = chat_history + [{"role": "assistant", "content": message.reply_to_message.text}]
                 
-                # Получаем ответ от AI с учётом истории
                 ai_response = await AiHandler.get_ai_response(chat_history, query)
                 
-                # Добавляем запрос пользователя и ответ бота в историю
                 self.chat_histories[chat_id].append({"role": "user", "content": query})
                 self.chat_histories[chat_id].append({"role": "assistant", "content": ai_response})
                 
-                # Ограничиваем длину истории (30 сообщений)
-                if len(self.chat_histories[chat_id]) > 30:
+                if len(self.chat_histories[chat_id]) > 30:  # Увеличено тобой
                     self.chat_histories[chat_id] = self.chat_histories[chat_id][-30:]
                 
                 await message.reply(ai_response)
@@ -437,10 +408,7 @@ class BotApp:
         self.setup_handlers()
         await self.on_startup()
         try:
-            await self.dp.start_polling(
-                self.bot,
-                allowed_updates=["message", "edited_message", "channel_post", "edited_channel_post"]
-            )
+            await self.dp.start_polling(self.bot, allowed_updates=["message"])
         finally:
             await self.on_shutdown()
 
