@@ -302,7 +302,7 @@ class BotApp:
         self.setup_handlers()
         await self.on_startup()
         try:
-            await self.dp.start_polling(self.bot, allowed_updates=types.Update.ALL_TYPES)  # Передаем bot в start_polling
+            await self.dp.start_polling(self.bot, allowed_updates=["message", "edited_message", "channel_post", "edited_channel_post"])  # Передаем bot в start_polling
         finally:
             await self.on_shutdown()
 
