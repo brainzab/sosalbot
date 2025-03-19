@@ -22,7 +22,7 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 # Версия кода
-CODE_VERSION = "2.1"
+CODE_VERSION = "2.2"
 
 # Получение переменных окружения
 def get_env_var(var_name, default=None):
@@ -326,49 +326,45 @@ class BotApp:
             logger.info("Бот успешно запущен")
             
             # Запускаем polling
-            await self.application.run_polling(drop_pending_updates=True)
+            await self.application.run_polling(allowed_updates=Update.ALL_TYPES, drop_pending_updates=True)
         except Exception as e:
             logger.error(f"Ошибка при запуске бота: {e}")
-            raise
+            # Не повторяем остановку бота здесь, позволяем это сделать в finally блоке main()
 
     async def stop(self):
         """Остановка бота"""
-        try:
-            logger.info("Остановка бота")
-            
-            # Останавливаем задачу поддержания активности
-            if self.keep_alive_task and not self.keep_alive_task.done():
-                self.keep_alive_task.cancel()
-                try:
-                    await self.keep_alive_task
-                except asyncio.CancelledError:
-                    pass
-            
-            # Останавливаем планировщик
-            if self.scheduler:
-                self.scheduler.shutdown()
-                logger.info("Планировщик остановлен")
-            
-            # Останавливаем приложение
-            if self.application:
-                await self.application.stop()
-                await self.application.shutdown()
-                logger.info("Приложение остановлено")
-        except Exception as e:
-            logger.error(f"Ошибка при остановке бота: {e}")
-            raise
+        logger.info("Остановка бота")
+        
+        # Останавливаем задачу поддержания активности
+        if self.keep_alive_task and not self.keep_alive_task.done():
+            self.keep_alive_task.cancel()
+            try:
+                await self.keep_alive_task
+            except asyncio.CancelledError:
+                pass
+        
+        # Останавливаем планировщик
+        if self.scheduler:
+            self.scheduler.shutdown()
+            logger.info("Планировщик остановлен")
+        
+        # Останавливаем приложение
+        if self.application:
+            await self.application.stop()
+            await self.application.shutdown()
+            logger.info("Приложение остановлено")
 
 # Основная функция
 async def main():
+    """Главная функция запуска бота"""
     bot = BotApp()
     try:
         logger.info("Запуск бота...")
         await bot.start()
     except (KeyboardInterrupt, SystemExit):
         logger.info("Получен сигнал остановки")
-    except Exception as e:
-        logger.error(f"Критическая ошибка: {e}")
     finally:
+        # Остановка бота в блоке finally всегда выполняется
         await bot.stop()
         logger.info("Бот остановлен")
 
@@ -376,8 +372,14 @@ async def main():
 if __name__ == "__main__":
     print(f"Старт приложения. Версия: {CODE_VERSION}")
     try:
-        asyncio.run(main())
+        # Создаем новый event loop и запускаем в нем главную функцию
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        loop.run_until_complete(main())
     except (KeyboardInterrupt, SystemExit):
         print("Программа завершена по запросу пользователя")
     except Exception as e:
         print(f"Необработанная ошибка: {e}")
+    finally:
+        # Закрываем event loop
+        loop.close()
