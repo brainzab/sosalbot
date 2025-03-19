@@ -172,8 +172,8 @@ class AiHandler:
             response = await deepseek_client.chat.completions.create(
                 model="deepseek-chat",
                 messages=messages,
-                max_tokens=500,
-                temperature=0.7
+                max_tokens=999,
+                temperature=1.5
             )
             return response.choices[0].message.content
         except Exception as e:
@@ -354,6 +354,7 @@ class BotApp:
             message_text = message.text.lower()
             bot_info = await self.bot.get_me()
             bot_username = f"@{bot_info.username.lower()}"
+            bot_id = bot_info.id
 
             logger.info(f"Сообщение от {message.from_user.id}: {message.text or 'Без текста'}")
 
@@ -367,6 +368,12 @@ class BotApp:
                 except Exception as e:
                     logger.error(f"Ошибка при установке реакции: {e}")
 
+            # Проверка на тег или ответ боту
+            is_reply_to_bot = (message.reply_to_message and 
+                              message.reply_to_message.from_user and 
+                              message.reply_to_message.from_user.id == bot_id)
+            is_tagged = bot_username in message_text
+
             if message_text in ['сосал?', 'sosal?']:
                 if random.random() < 0.1:
                     await message.reply(RARE_RESPONSE_SOSAL)
@@ -378,10 +385,11 @@ class BotApp:
             elif message_text == 'скамил?':
                 random_response = random.choice(RESPONSES_SCAMIL)
                 await message.reply(random_response)
-            elif bot_username in message_text:
-                query = message_text.replace(bot_username, "").strip()
+            elif is_tagged or is_reply_to_bot:
+                query = message_text.replace(bot_username, "").strip() if is_tagged else message_text
+                
                 if not query:
-                    await message.reply("И хуле ты меня тегнул, петушара?")
+                    await message.reply("И хуле ты мне пишешь пустоту, петушара?")
                     return
                 
                 current_year = datetime.now().year
@@ -394,16 +402,23 @@ class BotApp:
                 if chat_id not in self.chat_histories:
                     self.chat_histories[chat_id] = []
                 
+                # Если это ответ на сообщение бота, добавляем контекст этого сообщения
+                if is_reply_to_bot and message.reply_to_message.text:
+                    reply_context = [{"role": "assistant", "content": message.reply_to_message.text}]
+                    chat_history = self.chat_histories[chat_id] + reply_context
+                else:
+                    chat_history = self.chat_histories[chat_id]
+                
                 # Получаем ответ от AI с учётом истории
-                ai_response = await AiHandler.get_ai_response(self.chat_histories[chat_id], query)
+                ai_response = await AiHandler.get_ai_response(chat_history, query)
                 
                 # Добавляем запрос пользователя и ответ бота в историю
                 self.chat_histories[chat_id].append({"role": "user", "content": query})
                 self.chat_histories[chat_id].append({"role": "assistant", "content": ai_response})
                 
-                # Ограничиваем длину истории (20 сообщений)
-                if len(self.chat_histories[chat_id]) > 20:
-                    self.chat_histories[chat_id] = self.chat_histories[chat_id][-20:]
+                # Ограничиваем длину истории (30 сообщений)
+                if len(self.chat_histories[chat_id]) > 30:
+                    self.chat_histories[chat_id] = self.chat_histories[chat_id][-30:]
                 
                 await message.reply(ai_response)
         except Exception as e:
