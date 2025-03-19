@@ -36,7 +36,7 @@ def get_env_var(var_name, default=None):
 TELEGRAM_TOKEN = get_env_var('TELEGRAM_TOKEN')
 DEEPSEEK_API_KEY = get_env_var('DEEPSEEK_API_KEY')
 OPENWEATHER_API_KEY = get_env_var('OPENWEATHER_API_KEY')
-CHAT_ID = int(get_env_var('CHAT_ID'))  # Преобразуем в int для aiogram
+CHAT_ID = int(get_env_var('CHAT_ID'))
 
 # Настройка клиента DeepSeek
 deepseek_client = AsyncOpenAI(
@@ -200,7 +200,7 @@ class MorningMessageSender:
 class BotApp:
     def __init__(self):
         self.bot = Bot(token=TELEGRAM_TOKEN)
-        self.dp = Dispatcher(self.bot)
+        self.dp = Dispatcher()  # Исправлено: убрано self.bot
         self.scheduler = None
         self.morning_sender = None
         self.keep_alive_task = None
@@ -237,7 +237,6 @@ class BotApp:
         await self.bot.session.close()
         logger.info("Бот остановлен")
 
-    # Обработчики команд
     @staticmethod
     async def command_start(message: types.Message):
         await message.reply(f"Привет, я бот версии {CODE_VERSION}")
@@ -246,10 +245,9 @@ class BotApp:
     async def command_version(message: types.Message):
         await message.reply(f"Версия бота: {CODE_VERSION}")
 
-    # Обработчик всех сообщений
     async def handle_message(self, message: types.Message):
         try:
-            if not message.from_user or not message.text:  # Проверяем наличие текста
+            if not message.from_user or not message.text:
                 return
 
             message_text = message.text.lower()
@@ -298,13 +296,13 @@ class BotApp:
     def setup_handlers(self):
         self.dp.message.register(self.command_start, Command("start"))
         self.dp.message.register(self.command_version, Command("version"))
-        self.dp.message.register(self.handle_message)  # Без фильтра Text
+        self.dp.message.register(self.handle_message)
 
     async def start(self):
         self.setup_handlers()
         await self.on_startup()
         try:
-            await self.dp.start_polling(allowed_updates=types.Update.ALL_TYPES)
+            await self.dp.start_polling(self.bot, allowed_updates=types.Update.ALL_TYPES)  # Передаем bot в start_polling
         finally:
             await self.on_shutdown()
 
