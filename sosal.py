@@ -23,7 +23,7 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 # Версия кода
-CODE_VERSION = "2.4"
+CODE_VERSION = "2.5"
 
 # Получение переменных окружения
 def get_env_var(var_name, default=None):
@@ -37,7 +37,7 @@ def get_env_var(var_name, default=None):
 TELEGRAM_TOKEN = get_env_var('TELEGRAM_TOKEN')
 DEEPSEEK_API_KEY = get_env_var('DEEPSEEK_API_KEY')
 OPENWEATHER_API_KEY = get_env_var('OPENWEATHER_API_KEY')
-FOOTBALL_DATA_API_TOKEN = get_env_var('FOOTBALL_DATA_API_TOKEN')
+RAPIDAPI_KEY = get_env_var('RAPIDAPI_KEY')  # Ключ от RapidAPI
 CHAT_ID = int(get_env_var('CHAT_ID'))
 
 # Настройка клиента DeepSeek
@@ -56,11 +56,11 @@ RESPONSES_SCAMIL = ['да', 'было', 'с кайфом']
 TARGET_USER_ID = 660949286
 TARGET_REACTION = ReactionTypeEmoji(emoji="😁")
 
-# ID команд для football-data.org
+# ID команд для API-Football
 TEAM_IDS = {
-    "real": 86,    # Real Madrid
-    "lfc": 64,     # Liverpool
-    "arsenal": 57  # Arsenal
+    "real": 541,    # Real Madrid
+    "lfc": 40,      # Liverpool
+    "arsenal": 42   # Arsenal
 }
 
 # Класс для всех API-запросов
@@ -120,19 +120,44 @@ class ApiClient:
             return 0, 0
 
     @staticmethod
-    async def get_team_matches(team_id, status="FINISHED", limit=5):
-        url = f"https://api.football-data.org/v4/teams/{team_id}/matches?status={status}&limit={limit}"
-        headers = {"X-Auth-Token": FOOTBALL_DATA_API_TOKEN}
+    async def get_team_matches(team_id):
+        url = f"https://api-football-v1.p.rapidapi.com/v3/fixtures?team={team_id}&last=5"
+        headers = {
+            "X-RapidAPI-Key": RAPIDAPI_KEY,
+            "X-RapidAPI-Host": "api-football-v1.p.rapidapi.com"
+        }
         try:
             async with aiohttp.ClientSession() as session:
                 async with session.get(url, headers=headers) as response:
                     if response.status == 200:
-                        return await response.json()
+                        data = await response.json()
+                        logger.info(f"Ответ API-Football для команды {team_id}: {data}")
+                        return data
                     else:
-                        logger.error(f"Ошибка API football-data для команды {team_id}: {response.status}")
+                        logger.error(f"Ошибка API-Football для команды {team_id}: {response.status}")
                         return None
         except Exception as e:
             logger.error(f"Исключение при запросе матчей: {e}")
+            return None
+
+    @staticmethod
+    async def get_live_matches():
+        url = "https://api-football-v1.p.rapidapi.com/v3/fixtures?live=all"
+        headers = {
+            "X-RapidAPI-Key": RAPIDAPI_KEY,
+            "X-RapidAPI-Host": "api-football-v1.p.rapidapi.com"
+        }
+        try:
+            async with aiohttp.ClientSession() as session:
+                async with session.get(url, headers=headers) as response:
+                    if response.status == 200:
+                        data = await response.json()
+                        return data
+                    else:
+                        logger.error(f"Ошибка API-Football для live-матчей: {response.status}")
+                        return None
+        except Exception as e:
+            logger.error(f"Исключение при запросе live-матчей: {e}")
             return None
 
 # Класс для работы с AI
@@ -225,35 +250,36 @@ class MorningMessageSender:
 class GoalChecker:
     def __init__(self, bot):
         self.bot = bot
-        self.last_goals = {}  # Хранит последние известные голы для каждого матча
+        self.last_goals = {}
 
     async def check_live_goals(self):
-        for team_name, team_id in TEAM_IDS.items():
-            data = await ApiClient.get_team_matches(team_id, status="LIVE", limit=1)
-            if not data or not data.get("matches"):
+        data = await ApiClient.get_live_matches()
+        if not data or not data.get("response"):
+            return
+
+        for fixture in data["response"]:
+            fixture_id = fixture["fixture"]["id"]
+            home_team_id = fixture["teams"]["home"]["id"]
+            away_team_id = fixture["teams"]["away"]["id"]
+            if home_team_id not in TEAM_IDS.values() and away_team_id not in TEAM_IDS.values():
                 continue
 
-            match = data["matches"][0]
-            match_id = match["id"]
-            home_team = match["homeTeam"]["name"]
-            away_team = match["awayTeam"]["name"]
-            score = match["score"]["fullTime"]
-            
-            # Проверяем, есть ли новые голы
-            current_goals = match.get("goals", [])
-            last_goals = self.last_goals.get(match_id, [])
+            home_team = fixture["teams"]["home"]["name"]
+            away_team = fixture["teams"]["away"]["name"]
+            events = fixture.get("events", [])
+            last_goals = self.last_goals.get(fixture_id, [])
 
-            for goal in current_goals:
-                if goal not in last_goals:
-                    scorer = goal["player"]["name"]
-                    minute = goal["minute"]
-                    team_scored = goal["team"]["name"]
+            for event in events:
+                if event["type"] == "Goal" and event not in last_goals:
+                    scorer = event["player"]["name"]
+                    minute = event["time"]["elapsed"]
+                    team_scored = event["team"]["name"]
                     emoji = "⚽️🔥" if team_scored in [home_team, away_team] else "⚽️"
                     message = f"Гол! {scorer} забил на {minute} минуте в матче {home_team} vs {away_team}! {emoji}"
                     await self.bot.send_message(chat_id=CHAT_ID, text=message)
                     logger.info(f"Уведомление о голе отправлено: {message}")
 
-            self.last_goals[match_id] = current_goals
+            self.last_goals[fixture_id] = events
 
 # Основной класс бота
 class BotApp:
@@ -317,33 +343,33 @@ class BotApp:
             await message.reply("Команда не найдена, мудила!")
             return
 
-        data = await ApiClient.get_team_matches(team_id, status="FINISHED", limit=5)
-        if not data or not data.get("matches"):
+        data = await ApiClient.get_team_matches(team_id)
+        if not data or not data.get("response"):
             await message.reply("Не удалось получить данные о матчах. Пиздец какой-то!")
             return
 
         response = f"Последние 5 матчей {team_name.upper()}:\n\n"
-        for match in data["matches"]:
-            home_team = match["homeTeam"]["name"]
-            away_team = match["awayTeam"]["name"]
-            score = match["score"]["fullTime"]
-            home_goals = score["home"] if score["home"] is not None else 0
-            away_goals = score["away"] if score["away"] is not None else 0
-            date = match["utcDate"].split("T")[0]
+        for fixture in data["response"]:
+            home_team = fixture["teams"]["home"]["name"]
+            away_team = fixture["teams"]["away"]["name"]
+            home_goals = fixture["goals"]["home"] if fixture["goals"]["home"] is not None else 0
+            away_goals = fixture["goals"]["away"] if fixture["goals"]["away"] is not None else 0
+            date = fixture["fixture"]["date"].split("T")[0]
             
             # Определяем результат для команды
-            if match["homeTeam"]["id"] == team_id:
+            if fixture["teams"]["home"]["id"] == team_id:
                 result_icon = "🟢" if home_goals > away_goals else "🔴" if home_goals < away_goals else "🟡"
             else:
                 result_icon = "🟢" if away_goals > home_goals else "🔴" if away_goals < home_goals else "🟡"
 
             # Голы
             goals_str = "Голы: "
-            goals = match.get("goals", [])
-            if goals:
-                goals_str += ", ".join([f"{g['player']['name']} ({g['minute']}')" for g in goals])
+            events = fixture.get("events", [])
+            goal_events = [e for e in events if e["type"] == "Goal"]
+            if goal_events:
+                goals_str += ", ".join([f"{e['player']['name']} ({e['time']['elapsed']}')" for e in goal_events])
             else:
-                goals_str += "Нет данных"
+                goals_str += "Нет данных о голах"
 
             response += f"{result_icon} {date}: {home_team} {home_goals} - {away_goals} {away_team}\n{goals_str}\n\n"
 
