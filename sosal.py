@@ -22,7 +22,7 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 # Версия кода
-CODE_VERSION = "2.3"
+CODE_VERSION = "2.4"  # Обновил версию
 
 # Получение переменных окружения
 def get_env_var(var_name, default=None):
@@ -32,10 +32,11 @@ def get_env_var(var_name, default=None):
         sys.exit(1)
     return value if value is not None else default
 
-# Токен Telegram бота и API-ключи
+# Токены и ключи
 TELEGRAM_TOKEN = get_env_var('TELEGRAM_TOKEN')
 DEEPSEEK_API_KEY = get_env_var('DEEPSEEK_API_KEY')
 OPENWEATHER_API_KEY = get_env_var('OPENWEATHER_API_KEY')
+FOOTBALL_DATA_API_TOKEN = get_env_var('FOOTBALL_DATA_API_TOKEN')  # Новый токен
 CHAT_ID = int(get_env_var('CHAT_ID'))
 
 # Настройка клиента DeepSeek
@@ -53,6 +54,13 @@ RESPONSES_SCAMIL = ['да', 'было', 'с кайфом']
 # ID пользователя для реакции
 TARGET_USER_ID = 660949286
 TARGET_REACTION = ReactionTypeEmoji(emoji="😁")
+
+# ID команд для football-data.org
+TEAM_IDS = {
+    "real": 86,    # Real Madrid
+    "lfc": 64,     # Liverpool
+    "arsenal": 57  # Arsenal
+}
 
 # Класс для всех API-запросов
 class ApiClient:
@@ -109,6 +117,22 @@ class ApiClient:
         except Exception as e:
             logger.error(f"Исключение при получении цен криптовалют: {e}")
             return 0, 0
+
+    @staticmethod
+    async def get_team_matches(team_id, status="FINISHED", limit=5):
+        url = f"https://api.football-data.org/v4/teams/{team_id}/matches?status={status}&limit={limit}"
+        headers = {"X-Auth-Token": FOOTBALL_DATA_API_TOKEN}
+        try:
+            async with aiohttp.ClientSession() as session:
+                async with session.get(url, headers=headers) as response:
+                    if response.status == 200:
+                        return await response.json()
+                    else:
+                        logger.error(f"Ошибка API football-data для команды {team_id}: {response.status}")
+                        return None
+        except Exception as e:
+            logger.error(f"Исключение при запросе матчей: {e}")
+            return None
 
 # Класс для работы с AI
 class AiHandler:
@@ -196,13 +220,48 @@ class MorningMessageSender:
         except Exception as e:
             logger.error(f"Ошибка при отправке утреннего сообщения: {e}")
 
+# Класс для проверки голов в live-матчах
+class GoalChecker:
+    def __init__(self, bot):
+        self.bot = bot
+        self.last_goals = {}  # Хранит последние известные голы для каждого матча
+
+    async def check_live_goals(self):
+        for team_name, team_id in TEAM_IDS.items():
+            data = await ApiClient.get_team_matches(team_id, status="LIVE", limit=1)
+            if not data or not data.get("matches"):
+                continue
+
+            match = data["matches"][0]
+            match_id = match["id"]
+            home_team = match["homeTeam"]["name"]
+            away_team = match["awayTeam"]["name"]
+            score = match["score"]["fullTime"]
+            
+            # Проверяем, есть ли новые голы
+            current_goals = match.get("goals", [])
+            last_goals = self.last_goals.get(match_id, [])
+
+            for goal in current_goals:
+                if goal not in last_goals:
+                    scorer = goal["player"]["name"]
+                    minute = goal["minute"]
+                    team_scored = goal["team"]["name"]
+                    emoji = "⚽️🔥" if team_scored in [home_team, away_team] else "⚽️"
+                    message = f"Гол! {scorer} забил на {minute} минуте в матче {home_team} vs {away_team}! {emoji}"
+                    await self.bot.send_message(chat_id=CHAT_ID, text=message)
+                    logger.info(f"Уведомление о голе отправлено: {message}")
+
+            self.last_goals[match_id] = current_goals
+
 # Основной класс бота
 class BotApp:
     def __init__(self):
         self.bot = Bot(token=TELEGRAM_TOKEN)
-        self.dp = Dispatcher()  # Исправлено: убрано self.bot
+        self.dp = Dispatcher()
         self.scheduler = None
         self.morning_sender = None
+        self.goal_checker = None
         self.keep_alive_task = None
 
     async def keep_alive(self):
@@ -213,11 +272,17 @@ class BotApp:
     async def on_startup(self):
         logger.info(f"Запуск бота версии {CODE_VERSION}")
         self.morning_sender = MorningMessageSender(self.bot)
+        self.goal_checker = GoalChecker(self.bot)
         self.scheduler = AsyncIOScheduler()
         moscow_tz = pytz.timezone('Europe/Moscow')
         self.scheduler.add_job(
             self.morning_sender.send_morning_message,
             trigger=CronTrigger(hour=7, minute=30, timezone=moscow_tz)
+        )
+        self.scheduler.add_job(
+            self.goal_checker.check_live_goals,
+            trigger='interval',
+            seconds=60  # Проверка каждую минуту
         )
         self.scheduler.start()
         logger.info("Планировщик запущен")
@@ -244,6 +309,44 @@ class BotApp:
     @staticmethod
     async def command_version(message: types.Message):
         await message.reply(f"Версия бота: {CODE_VERSION}")
+
+    async def command_team_matches(self, message: types.Message, team_name):
+        team_id = TEAM_IDS.get(team_name)
+        if not team_id:
+            await message.reply("Команда не найдена, мудила!")
+            return
+
+        data = await ApiClient.get_team_matches(team_id, status="FINISHED", limit=5)
+        if not data or not data.get("matches"):
+            await message.reply("Не удалось получить данные о матчах. Пиздец какой-то!")
+            return
+
+        response = f"Последние 5 матчей {team_name.upper()}:\n\n"
+        for match in data["matches"]:
+            home_team = match["homeTeam"]["name"]
+            away_team = match["awayTeam"]["name"]
+            score = match["score"]["fullTime"]
+            home_goals = score["home"] if score["home"] is not None else 0
+            away_goals = score["away"] if score["away"] is not None else 0
+            date = match["utcDate"].split("T")[0]
+            
+            # Определяем результат для команды
+            if match["homeTeam"]["id"] == team_id:
+                result_icon = "🟢" if home_goals > away_goals else "🔴" if home_goals < away_goals else "🟡"
+            else:
+                result_icon = "🟢" if away_goals > home_goals else "🔴" if away_goals < home_goals else "🟡"
+
+            # Голы
+            goals_str = "Голы: "
+            goals = match.get("goals", [])
+            if goals:
+                goals_str += ", ".join([f"{g['player']['name']} ({g['minute']}')" for g in goals])
+            else:
+                goals_str += "Нет данных"
+
+            response += f"{result_icon} {date}: {home_team} {home_goals} - {away_goals} {away_team}\n{goals_str}\n\n"
+
+        await message.reply(response)
 
     async def handle_message(self, message: types.Message):
         try:
@@ -296,13 +399,19 @@ class BotApp:
     def setup_handlers(self):
         self.dp.message.register(self.command_start, Command("start"))
         self.dp.message.register(self.command_version, Command("version"))
+        self.dp.message.register(lambda msg: self.command_team_matches(msg, "real"), Command("real"))
+        self.dp.message.register(lambda msg: self.command_team_matches(msg, "lfc"), Command("lfc"))
+        self.dp.message.register(lambda msg: self.command_team_matches(msg, "arsenal"), Command("arsenal"))
         self.dp.message.register(self.handle_message)
 
     async def start(self):
         self.setup_handlers()
         await self.on_startup()
         try:
-            await self.dp.start_polling(self.bot, allowed_updates=["message", "edited_message", "channel_post", "edited_channel_post"])  # Передаем bot в start_polling
+            await self.dp.start_polling(
+                self.bot,
+                allowed_updates=["message", "edited_message", "channel_post", "edited_channel_post"]
+            )
         finally:
             await self.on_shutdown()
 
