@@ -3,7 +3,7 @@ import os
 import asyncio
 import logging
 from telegram import Update
-from telegram.ext import Application, CommandHandler, MessageHandler, filters
+from telegram.ext import Application, CommandHandler, MessageHandler as TelegramMessageHandler, filters
 from telegram.constants import ParseMode
 from openai import AsyncOpenAI
 import aiohttp
@@ -22,7 +22,7 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 # Версия кода
-CODE_VERSION = "2.0"
+CODE_VERSION = "2.1"
 
 # Получение переменных окружения
 def get_env_var(var_name, default=None):
@@ -133,8 +133,8 @@ class AiHandler:
             logger.error(f"Ошибка при получении ответа от AI: {e}")
             return f"Ошибка, ёбана: {str(e)}"
 
-# Класс для обработки команд и сообщений
-class MessageHandler:
+# Класс для обработки команд и сообщений (переименован, чтобы избежать конфликта)
+class BotMessageHandler:
     def __init__(self, application):
         self.application = application
 
@@ -299,13 +299,13 @@ class BotApp:
             self.application = Application.builder().token(TELEGRAM_TOKEN).build()
             
             # Создаем экземпляры обработчиков
-            self.message_handler = MessageHandler(self.application)
+            self.message_handler = BotMessageHandler(self.application)
             self.morning_sender = MorningMessageSender(self.application)
             
             # Регистрируем обработчики
             self.application.add_handler(CommandHandler("start", self.message_handler.command_start))
             self.application.add_handler(CommandHandler("version", self.message_handler.command_version))
-            self.application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, self.message_handler.handle_message))
+            self.application.add_handler(TelegramMessageHandler(filters.TEXT & ~filters.COMMAND, self.message_handler.handle_message))
             
             # Создаем и запускаем планировщик
             self.scheduler = AsyncIOScheduler()
