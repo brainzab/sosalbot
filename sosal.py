@@ -12,6 +12,7 @@ import aiohttp
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.cron import CronTrigger
 import pytz
+from functools import partial
 
 # Настройка логирования
 logging.basicConfig(
@@ -22,7 +23,7 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 # Версия кода
-CODE_VERSION = "2.4"  # Обновил версию
+CODE_VERSION = "2.4"
 
 # Получение переменных окружения
 def get_env_var(var_name, default=None):
@@ -36,7 +37,7 @@ def get_env_var(var_name, default=None):
 TELEGRAM_TOKEN = get_env_var('TELEGRAM_TOKEN')
 DEEPSEEK_API_KEY = get_env_var('DEEPSEEK_API_KEY')
 OPENWEATHER_API_KEY = get_env_var('OPENWEATHER_API_KEY')
-FOOTBALL_DATA_API_TOKEN = get_env_var('FOOTBALL_DATA_API_TOKEN')  # Новый токен
+FOOTBALL_DATA_API_TOKEN = get_env_var('FOOTBALL_DATA_API_TOKEN')
 CHAT_ID = int(get_env_var('CHAT_ID'))
 
 # Настройка клиента DeepSeek
@@ -282,7 +283,7 @@ class BotApp:
         self.scheduler.add_job(
             self.goal_checker.check_live_goals,
             trigger='interval',
-            seconds=60  # Проверка каждую минуту
+            seconds=60
         )
         self.scheduler.start()
         logger.info("Планировщик запущен")
@@ -399,9 +400,9 @@ class BotApp:
     def setup_handlers(self):
         self.dp.message.register(self.command_start, Command("start"))
         self.dp.message.register(self.command_version, Command("version"))
-        self.dp.message.register(lambda msg: self.command_team_matches(msg, "real"), Command("real"))
-        self.dp.message.register(lambda msg: self.command_team_matches(msg, "lfc"), Command("lfc"))
-        self.dp.message.register(lambda msg: self.command_team_matches(msg, "arsenal"), Command("arsenal"))
+        self.dp.message.register(partial(self.command_team_matches, team_name="real"), Command("real"))
+        self.dp.message.register(partial(self.command_team_matches, team_name="lfc"), Command("lfc"))
+        self.dp.message.register(partial(self.command_team_matches, team_name="arsenal"), Command("arsenal"))
         self.dp.message.register(self.handle_message)
 
     async def start(self):
