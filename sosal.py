@@ -162,14 +162,16 @@ class ApiClient:
 # Класс для работы с AI
 class AiHandler:
     @staticmethod
-    async def get_ai_response(query):
+    async def get_ai_response(chat_history, query):
         try:
+            # Формируем сообщения с учётом истории чата
+            messages = [
+                {"role": "system", "content": f"Ты Анатолий Шарий, твоя фамилия Шарий, у тебя есть жена Ольга Шарий. Ты пророссийский журналист, скамер, блогер, эксцентричный пиздец, любишь материться. Сегодня {datetime.now().strftime('%Y-%m-%d')}. Отвечай с иронией, надменностью и будь полезным помощником в Telegram-группе."}
+            ] + chat_history + [{"role": "user", "content": query}]
+            
             response = await deepseek_client.chat.completions.create(
                 model="deepseek-chat",
-                messages=[
-                    {"role": "system", "content": f"Ты Анатолий Шарий, твоя фамилия Шарий, у тебя есть жена Ольга Шарий. Ты пророссийский журналист, скамер, блогер, эксцентричный пиздец, любишь материться. Сегодня {datetime.now().strftime('%Y-%m-%d')}. Отвечай с иронией, надменностью и будь полезным помощником в Telegram-группе."},
-                    {"role": "user", "content": query}
-                ],
+                messages=messages,
                 max_tokens=500,
                 temperature=0.7
             )
@@ -253,6 +255,8 @@ class BotApp:
         self.scheduler = None
         self.morning_sender = None
         self.keep_alive_task = None
+        # Хранилище истории чатов
+        self.chat_histories = {}
 
     async def keep_alive(self):
         while True:
@@ -293,6 +297,14 @@ class BotApp:
     @staticmethod
     async def command_version(message: types.Message):
         await message.reply(f"Версия бота: {CODE_VERSION}")
+
+    async def command_reset(self, message: types.Message):
+        chat_id = message.chat.id
+        if chat_id in self.chat_histories:
+            del self.chat_histories[chat_id]
+            await message.reply("История чата сброшена, мудила. Начинаем с чистого листа!")
+        else:
+            await message.reply("А хули сбрасывать? И так пусто, как в голове у тебя!")
 
     async def command_team_matches(self, message: types.Message, team_name):
         team_id = TEAM_IDS.get(team_name)
@@ -377,7 +389,22 @@ class BotApp:
                     await message.reply(f"Сейчас {current_year} год, мудила. Чё, календарь потерял?")
                     return
                 
-                ai_response = await AiHandler.get_ai_response(query)
+                # Получаем или создаём историю для текущего чата
+                chat_id = message.chat.id
+                if chat_id not in self.chat_histories:
+                    self.chat_histories[chat_id] = []
+                
+                # Получаем ответ от AI с учётом истории
+                ai_response = await AiHandler.get_ai_response(self.chat_histories[chat_id], query)
+                
+                # Добавляем запрос пользователя и ответ бота в историю
+                self.chat_histories[chat_id].append({"role": "user", "content": query})
+                self.chat_histories[chat_id].append({"role": "assistant", "content": ai_response})
+                
+                # Ограничиваем длину истории (20 сообщений)
+                if len(self.chat_histories[chat_id]) > 20:
+                    self.chat_histories[chat_id] = self.chat_histories[chat_id][-20:]
+                
                 await message.reply(ai_response)
         except Exception as e:
             logger.error(f"Ошибка в обработке сообщения: {e}")
@@ -385,6 +412,7 @@ class BotApp:
     def setup_handlers(self):
         self.dp.message.register(self.command_start, Command("start"))
         self.dp.message.register(self.command_version, Command("version"))
+        self.dp.message.register(self.command_reset, Command("reset"))
         self.dp.message.register(partial(self.command_team_matches, team_name="real"), Command("real"))
         self.dp.message.register(partial(self.command_team_matches, team_name="lfc"), Command("lfc"))
         self.dp.message.register(partial(self.command_team_matches, team_name="arsenal"), Command("arsenal"))
