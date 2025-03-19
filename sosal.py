@@ -3,7 +3,7 @@ import os
 import asyncio
 import logging
 import sys
-from datetime import datetime
+from datetime import datetime, timedelta
 from aiogram import Bot, Dispatcher, types
 from aiogram.filters import Command
 from aiogram.types import ReactionTypeEmoji
@@ -13,6 +13,7 @@ from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.cron import CronTrigger
 import pytz
 from functools import partial
+from collections import defaultdict
 
 # Настройка логирования
 logging.basicConfig(
@@ -23,7 +24,7 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 # Версия кода
-CODE_VERSION = "2.6"
+CODE_VERSION = "2.7"  # Обновил версию
 
 # Получение переменных окружения
 def get_env_var(var_name, default=None):
@@ -174,10 +175,12 @@ class AiHandler:
             logger.error(f"Ошибка при получении ответа от AI: {e}")
             return f"Ошибка, ёбана: {str(e)}"
 
-# Класс для отправки утренних сообщений
-class MorningMessageSender:
+# Класс для отправки утренних сообщений и отчётов
+class MessageSender:
     def __init__(self, bot):
         self.bot = bot
+        self.daily_message_count = defaultdict(int)  # Подсчёт сообщений за день по пользователям
+        self.total_messages = 0  # Общее количество сообщений за день
 
     async def send_morning_message(self):
         logger.info("Подготовка утреннего сообщения")
@@ -235,13 +238,39 @@ class MorningMessageSender:
         except Exception as e:
             logger.error(f"Ошибка при отправке утреннего сообщения: {e}")
 
+    async def send_daily_report(self):
+        logger.info("Подготовка ежедневного отчёта")
+        try:
+            if not self.total_messages:
+                report = "Сегодня в группе тишина, ни одного сообщения, пиздец какой-то!"
+            else:
+                report = f"Отчёт за день ({datetime.now().strftime('%Y-%m-%d')}):\n\n"
+                report += f"Всего сообщений: {self.total_messages}\n"
+                report += "Кто сколько нахуярил:\n"
+                for user_id, count in sorted(self.daily_message_count.items(), key=lambda x: x[1], reverse=True):
+                    user = await self.bot.get_chat_member(CHAT_ID, user_id)
+                    username = user.user.username or user.user.first_name
+                    report += f"@{username}: {count}\n"
+            
+            await self.bot.send_message(
+                chat_id=CHAT_ID,
+                text=report
+            )
+            logger.info("Ежедневный отчёт отправлен")
+            
+            # Сброс счётчиков после отправки
+            self.daily_message_count.clear()
+            self.total_messages = 0
+        except Exception as e:
+            logger.error(f"Ошибка при отправке ежедневного отчёта: {e}")
+
 # Основной класс бота
 class BotApp:
     def __init__(self):
         self.bot = Bot(token=TELEGRAM_TOKEN)
         self.dp = Dispatcher()
         self.scheduler = None
-        self.morning_sender = None
+        self.message_sender = None
         self.keep_alive_task = None
         self.chat_histories = {}
 
@@ -252,11 +281,15 @@ class BotApp:
 
     async def on_startup(self):
         logger.info(f"Запуск бота версии {CODE_VERSION}")
-        self.morning_sender = MorningMessageSender(self.bot)
+        self.message_sender = MessageSender(self.bot)
         self.scheduler = AsyncIOScheduler(timezone=pytz.timezone('Europe/Moscow'))
         self.scheduler.add_job(
-            self.morning_sender.send_morning_message,
-            trigger=CronTrigger(hour=17, minute=53)
+            self.message_sender.send_morning_message,
+            trigger=CronTrigger(hour=7, minute=30)
+        )
+        self.scheduler.add_job(
+            self.message_sender.send_daily_report,
+            trigger=CronTrigger(hour=23, minute=30)
         )
         self.scheduler.start()
         logger.info("Планировщик запущен")
@@ -331,8 +364,18 @@ class BotApp:
 
     async def handle_message(self, message: types.Message):
         try:
-            if not message.from_user or not message.text:
+            if not message.from_user or not message.text or message.chat.id != CHAT_ID:
                 return
+
+            # Подсчёт сообщений
+            moscow_tz = pytz.timezone('Europe/Moscow')
+            message_time = message.date.astimezone(moscow_tz)
+            current_day = message_time.date()
+            today = datetime.now(moscow_tz).date()
+            
+            if current_day == today:
+                self.message_sender.daily_message_count[message.from_user.id] += 1
+                self.message_sender.total_messages += 1
 
             message_text = message.text.lower()
             bot_info = await self.bot.get_me()
