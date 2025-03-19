@@ -5,7 +5,7 @@ import logging
 import sys
 from datetime import datetime
 from aiogram import Bot, Dispatcher, types
-from aiogram.filters import Command, Text
+from aiogram.filters import Command
 from aiogram.types import ReactionTypeEmoji
 from openai import AsyncOpenAI
 import aiohttp
@@ -246,13 +246,13 @@ class BotApp:
     async def command_version(message: types.Message):
         await message.reply(f"Версия бота: {CODE_VERSION}")
 
-    # Обработчик текстовых сообщений
+    # Обработчик всех сообщений
     async def handle_message(self, message: types.Message):
         try:
-            if not message.from_user:
+            if not message.from_user or not message.text:  # Проверяем наличие текста
                 return
 
-            message_text = message.text.lower() if message.text else ""
+            message_text = message.text.lower()
             bot_info = await self.bot.get_me()
             bot_username = f"@{bot_info.username.lower()}"
 
@@ -279,7 +279,7 @@ class BotApp:
             elif message_text == 'скамил?':
                 random_response = random.choice(RESPONSES_SCAMIL)
                 await message.reply(random_response)
-            elif message_text and bot_username in message_text:
+            elif bot_username in message_text:
                 query = message_text.replace(bot_username, "").strip()
                 if not query:
                     await message.reply("И хуле ты меня тегнул, петушара?")
@@ -298,7 +298,7 @@ class BotApp:
     def setup_handlers(self):
         self.dp.message.register(self.command_start, Command("start"))
         self.dp.message.register(self.command_version, Command("version"))
-        self.dp.message.register(self.handle_message, Text())
+        self.dp.message.register(self.handle_message)  # Без фильтра Text
 
     async def start(self):
         self.setup_handlers()
