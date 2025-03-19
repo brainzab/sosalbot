@@ -212,6 +212,7 @@ async def run_scheduler(application):
         logger.info("Планировщик остановлен")
 
 # Основная функция
+# Основная функция
 async def main():
     # Логируем версию кода
     logger.info(f"Запуск бота, версия кода: {CODE_VERSION}")
@@ -220,30 +221,17 @@ async def main():
     application = Application.builder().token(TELEGRAM_TOKEN).read_timeout(30).build()
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
 
-    # Инициализируем и запускаем приложение
-    await application.initialize()
-    await application.start()
-    logger.info("Бот полностью запущен")
-
     # Запускаем планировщик в отдельной задаче
     scheduler_task = asyncio.create_task(run_scheduler(application))
 
-    # Запускаем polling
+    # Запускаем polling и обрабатываем прерывания
     try:
-        await application.run_polling()
-    except Exception as e:
-        logger.error(f"Ошибка в run_polling: {e}")
-        raise
+        await application.run_polling(allowed_updates=Update.ALL_TYPES)
     finally:
-        # Останавливаем планировщик и приложение
+        # Останавливаем планировщик
         scheduler_task.cancel()
-        await asyncio.sleep(1)  # Даём время на завершение
-        await application.stop()
-        await application.shutdown()
+        try:
+            await asyncio.wait_for(scheduler_task, timeout=5)
+        except (asyncio.TimeoutError, asyncio.CancelledError):
+            pass
         logger.info("Бот остановлен")
-
-if __name__ == '__main__':
-    try:
-        asyncio.run(main())
-    except Exception as e:
-        logger.error(f"Ошибка в главном цикле: {e}")
