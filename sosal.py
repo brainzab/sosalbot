@@ -256,7 +256,7 @@ class BotApp:
         self.scheduler = AsyncIOScheduler(timezone=pytz.timezone('Europe/Moscow'))
         self.scheduler.add_job(
             self.morning_sender.send_morning_message,
-            trigger=CronTrigger(hour=17, minute=50)
+            trigger=CronTrigger(hour=17, minute=53)
         )
         self.scheduler.start()
         logger.info("Планировщик запущен")
