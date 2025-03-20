@@ -13,6 +13,8 @@ from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.cron import CronTrigger
 import pytz
 from functools import partial
+import asyncpg
+import json
 
 # Настройка логирования
 logging.basicConfig(
@@ -24,6 +26,11 @@ logger = logging.getLogger(__name__)
 
 # Версия кода
 CODE_VERSION = "2.6"
+
+# Константы
+MAX_TOKENS = 999
+AI_TEMPERATURE = 1.5
+CHAT_HISTORY_LIMIT = 30
 
 # Получение переменных окружения
 def get_env_var(var_name, default=None):
@@ -39,29 +46,19 @@ DEEPSEEK_API_KEY = get_env_var('DEEPSEEK_API_KEY')
 OPENWEATHER_API_KEY = get_env_var('OPENWEATHER_API_KEY')
 RAPIDAPI_KEY = get_env_var('RAPIDAPI_KEY')
 CHAT_ID = int(get_env_var('CHAT_ID'))
+DATABASE_URL = get_env_var('DATABASE_URL')
+TARGET_USER_ID = int(get_env_var('TARGET_USER_ID', '660949286'))
+
+# Константы для ответов из .env
+RESPONSES_SOSAL = json.loads(get_env_var('RESPONSES_SOSAL', '["да", "было", "ну сосал", "прям ща"]'))
+RARE_RESPONSE_SOSAL = get_env_var('RARE_RESPONSE_SOSAL', 'пошел нахуй')
+RESPONSE_LETAL = get_env_var('RESPONSE_LETAL', 'да')
+RESPONSES_SCAMIL = json.loads(get_env_var('RESPONSES_SCAMIL', '["да", "было", "с кайфом"]'))
+TEAM_IDS = json.loads(get_env_var('TEAM_IDS', '{"real": 541, "lfc": 40, "arsenal": 42}'))
+TARGET_REACTION = ReactionTypeEmoji(emoji=get_env_var('TARGET_REACTION', '😁'))
 
 # Настройка клиента DeepSeek
-deepseek_client = AsyncOpenAI(
-    api_key=DEEPSEEK_API_KEY,
-    base_url="https://api.deepseek.com"
-)
-
-# Константы для ответов
-RESPONSES_SOSAL = ['да', 'было', 'ну сосал', 'прям ща']
-RARE_RESPONSE_SOSAL = 'пошел нахуй'
-RESPONSE_LETAL = 'да'
-RESPONSES_SCAMIL = ['да', 'было', 'с кайфом']
-
-# ID пользователя для реакции
-TARGET_USER_ID = 660949286
-TARGET_REACTION = ReactionTypeEmoji(emoji="😁")
-
-# ID команд для API-Football
-TEAM_IDS = {
-    "real": 541,  # Real Madrid
-    "lfc": 40,    # Liverpool
-    "arsenal": 42 # Arsenal
-}
+deepseek_client = AsyncOpenAI(api_key=DEEPSEEK_API_KEY, base_url="https://api.deepseek.com")
 
 # Класс для всех API-запросов
 class ApiClient:
@@ -78,7 +75,7 @@ class ApiClient:
                         return f"{temp}°C, {desc}"
                     logger.error(f"Ошибка получения погоды для {city}: {response.status}")
                     return "Нет данных"
-        except Exception as e:
+        except aiohttp.ClientError as e:
             logger.error(f"Исключение при получении погоды: {e}")
             return "Нет данных"
 
@@ -95,7 +92,7 @@ class ApiClient:
                         return usd_byn, usd_rub
                     logger.error(f"Ошибка получения курсов валют: {response.status}")
                     return 0, 0
-        except Exception as e:
+        except aiohttp.ClientError as e:
             logger.error(f"Исключение при получении курсов валют: {e}")
             return 0, 0
 
@@ -112,17 +109,14 @@ class ApiClient:
                         return btc_price, wld_price
                     logger.error(f"Ошибка получения цен криптовалют: {response.status}")
                     return 0, 0
-        except Exception as e:
+        except aiohttp.ClientError as e:
             logger.error(f"Исключение при получении цен криптовалют: {e}")
             return 0, 0
 
     @staticmethod
     async def get_team_matches(team_id):
         url = f"https://api-football-v1.p.rapidapi.com/v3/fixtures?team={team_id}&last=5"
-        headers = {
-            "X-RapidAPI-Key": RAPIDAPI_KEY,
-            "X-RapidAPI-Host": "api-football-v1.p.rapidapi.com"
-        }
+        headers = {"X-RapidAPI-Key": RAPIDAPI_KEY, "X-RapidAPI-Host": "api-football-v1.p.rapidapi.com"}
         try:
             async with aiohttp.ClientSession() as session:
                 async with session.get(url, headers=headers) as response:
@@ -130,17 +124,14 @@ class ApiClient:
                         return await response.json()
                     logger.error(f"Ошибка API-Football для команды {team_id}: {response.status}")
                     return None
-        except Exception as e:
+        except aiohttp.ClientError as e:
             logger.error(f"Исключение при запросе матчей: {e}")
             return None
 
     @staticmethod
     async def get_match_events(fixture_id):
         url = f"https://api-football-v1.p.rapidapi.com/v3/fixtures/events?fixture={fixture_id}"
-        headers = {
-            "X-RapidAPI-Key": RAPIDAPI_KEY,
-            "X-RapidAPI-Host": "api-football-v1.p.rapidapi.com"
-        }
+        headers = {"X-RapidAPI-Key": RAPIDAPI_KEY, "X-RapidAPI-Host": "api-football-v1.p.rapidapi.com"}
         try:
             async with aiohttp.ClientSession() as session:
                 async with session.get(url, headers=headers) as response:
@@ -150,7 +141,7 @@ class ApiClient:
                         return data
                     logger.error(f"Ошибка API-Football для событий матча {fixture_id}: {response.status}")
                     return None
-        except Exception as e:
+        except aiohttp.ClientError as e:
             logger.error(f"Исключение при запросе событий матча: {e}")
             return None
 
@@ -162,12 +153,11 @@ class AiHandler:
             messages = [
                 {"role": "system", "content": f"Ты Анатолий Шарий, твоя фамилия Шарий, у тебя есть жена Ольга Шарий. Ты пророссийский журналист, скамер, блогер, эксцентричный пиздец, любишь материться. Сегодня {datetime.now().strftime('%Y-%m-%d')}. Отвечай с иронией, надменностью и будь полезным помощником в Telegram-группе."}
             ] + chat_history + [{"role": "user", "content": query}]
-            
             response = await deepseek_client.chat.completions.create(
                 model="deepseek-chat",
                 messages=messages,
-                max_tokens=999,
-                temperature=1.5
+                max_tokens=MAX_TOKENS,
+                temperature=AI_TEMPERATURE
             )
             return response.choices[0].message.content
         except Exception as e:
@@ -183,57 +173,38 @@ class MorningMessageSender:
         logger.info("Подготовка утреннего сообщения")
         try:
             cities = {
-                "Минск": "Minsk,BY",
-                "Жлобин": "Zhlobin,BY",
-                "Гомель": "Gomel,BY",
-                "Житковичи": "Zhitkovichi,BY",
-                "Шри-Ланка": "Colombo,LK",
-                "Ноябрьск": "Noyabrsk,RU"
+                "Минск": "Minsk,BY", "Жлобин": "Zhlobin,BY", "Гомель": "Gomel,BY",
+                "Житковичи": "Zhitkovichi,BY", "Шри-Ланка": "Colombo,LK", "Ноябрьск": "Noyabrsk,RU"
             }
-            
-            weather_data = {}
-            for city_name, city_code in cities.items():
-                weather_data[city_name] = await ApiClient.get_weather(city_code)
-            
-            usd_byn_rate, usd_rub_rate = await ApiClient.get_currency_rates()
-            btc_price_usd, wld_price_usd = await ApiClient.get_crypto_prices()
-            
-            try:
-                btc_price_byn = float(btc_price_usd) * float(usd_byn_rate) if btc_price_usd and usd_byn_rate else 0
-                wld_price_byn = float(wld_price_usd) * float(usd_byn_rate) if wld_price_usd and usd_byn_rate else 0
-            except (ValueError, TypeError) as e:
-                logger.error(f"Ошибка конвертации курсов: {e}")
-                btc_price_byn = wld_price_byn = 0
+            weather_tasks = [ApiClient.get_weather(code) for code in cities.values()]
+            weather_results, (usd_byn_rate, usd_rub_rate), (btc_price_usd, wld_price_usd) = await asyncio.gather(
+                asyncio.gather(*weather_tasks, return_exceptions=True),
+                ApiClient.get_currency_rates(),
+                ApiClient.get_crypto_prices()
+            )
+            weather_data = dict(zip(cities.keys(), weather_results))
+
+            btc_price_byn = float(btc_price_usd) * float(usd_byn_rate) if btc_price_usd and usd_byn_rate else 0
+            wld_price_byn = float(wld_price_usd) * float(usd_byn_rate) if wld_price_usd and usd_byn_rate else 0
 
             message = (
                 "Родные мои, всем доброе утро и хорошего дня! ❤️\n\n"
                 "*Положняк по погоде:*\n"
-                f"🌥 *Минск*: {weather_data['Минск']}\n"
-                f"🌥 *Жлобин*: {weather_data['Жлобин']}\n"
-                f"🌥 *Гомель*: {weather_data['Гомель']}\n"
-                f"🌥 *Житковичи*: {weather_data['Житковичи']}\n"
-                f"🌴 *Шри-Ланка*: {weather_data['Шри-Ланка']}\n"
-                f"❄️ *Ноябрьск*: {weather_data['Ноябрьск']}\n\n"
+                + "\n".join(f"🌥 *{city}*: {data}" for city, data in weather_data.items()) + "\n\n"
                 "*Положняк по курсам:*\n"
+                f"💵 *USD/BYN*: {usd_byn_rate:.2f} BYN\n"
+                f"💵 *USD/RUB*: {usd_rub_rate:.2f} RUB\n"
+                f"₿ *BTC*: ${btc_price_usd:,.2f} USD | {btc_price_byn:,.2f} BYN\n"
+                f"🌍 *WLD*: ${wld_price_usd:.2f} USD | {wld_price_byn:.2f} BYN"
             )
-            
-            if usd_byn_rate:
-                message += f"💵 *USD/BYN*: {usd_byn_rate:.2f} BYN\n"
-            if usd_rub_rate:
-                message += f"💵 *USD/RUB*: {usd_rub_rate:.2f} RUB\n"
-            if btc_price_usd:
-                message += f"₿ *BTC*: ${btc_price_usd:,.2f} USD | {btc_price_byn:,.2f} BYN\n" if btc_price_byn else f"₿ *BTC*: ${btc_price_usd:,.2f} USD\n"
-            if wld_price_usd:
-                message += f"🌍 *WLD*: ${wld_price_usd:.2f} USD | {wld_price_byn:.2f} BYN\n" if wld_price_byn else f"🌍 *WLD*: ${wld_price_usd:.2f} USD\n"
-            
-            await self.bot.send_message(
-                chat_id=CHAT_ID,
-                text=message,
-                parse_mode=types.ParseMode.MARKDOWN
-            )
+            await self.bot.send_message(chat_id=CHAT_ID, text=message, parse_mode=types.ParseMode.MARKDOWN)
             logger.info("Утреннее сообщение отправлено")
-        except Exception as e:
-            logger.error(f"Ошибка при отправке утреннего сообщения: {e}")
+        except aiohttp.ClientError as e:
+            logger.error(f"Ошибка при запросе данных: {e}")
+        except aiogram.exceptions.TelegramAPIError as e:
+            logger.error(f"Ошибка отправки сообщения в Telegram: {e}")
+        except ValueError as e:
+            logger.error(f"Ошибка форматирования данных: {e}")
 
 # Основной класс бота
 class BotApp:
@@ -243,7 +214,8 @@ class BotApp:
         self.scheduler = None
         self.morning_sender = None
         self.keep_alive_task = None
-        self.chat_histories = {}
+        self.db_pool = None
+        self.bot_info = None
 
     async def keep_alive(self):
         while True:
@@ -252,13 +224,21 @@ class BotApp:
 
     async def on_startup(self):
         logger.info(f"Запуск бота версии {CODE_VERSION}")
+        self.bot_info = await self.bot.get_me()
         self.morning_sender = MorningMessageSender(self.bot)
+        self.db_pool = await asyncpg.create_pool(DATABASE_URL)
+        async with self.db_pool.acquire() as conn:
+            await conn.execute("""
+                CREATE TABLE IF NOT EXISTS chat_history (
+                    chat_id BIGINT,
+                    role TEXT,
+                    content TEXT,
+                    timestamp DOUBLE PRECISION
+                )
+            """)
         self.scheduler = AsyncIOScheduler(timezone=pytz.timezone('Europe/Moscow'))
-        self.scheduler.add_job(
-            self.morning_sender.send_morning_message,
-            trigger=CronTrigger(hour=17, minute=53)
-        )
-        self.scheduler.start()
+        self.scheduler.add_job(self.morning_sender.send_morning_message, trigger=CronTrigger(hour=17, minute=53))
+        self.scheduler 행동start()
         logger.info("Планировщик запущен")
         self.keep_alive_task = asyncio.create_task(self.keep_alive())
 
@@ -273,36 +253,48 @@ class BotApp:
         if self.scheduler:
             self.scheduler.shutdown()
             logger.info("Планировщик остановлен")
+        if self.db_pool:
+            await self.db_pool.close()
+            logger.info("Соединение с PostgreSQL закрыто")
         await self.bot.session.close()
         logger.info("Бот остановлен")
 
-    @staticmethod
-    async def command_start(message: types.Message):
+    async def get_chat_history(self, chat_id):
+        async with self.db_pool.acquire() as conn:
+            rows = await conn.fetch(
+                "SELECT role, content FROM chat_history WHERE chat_id = $1 ORDER BY timestamp DESC LIMIT $2",
+                chat_id, CHAT_HISTORY_LIMIT
+            )
+            return [{"role": row['role'], "content": row['content']} for row in reversed(rows)]
+
+    async def save_chat_message(self, chat_id, role, content):
+        async with self.db_pool.acquire() as conn:
+            await conn.execute(
+                "INSERT INTO chat_history (chat_id, role, content, timestamp) VALUES ($1, $2, $3, $4)",
+                chat_id, role, content, datetime.now().timestamp()
+            )
+
+    async def command_start(self, message: types.Message):
         await message.reply(f"Привет, я бот версии {CODE_VERSION}")
 
-    @staticmethod
-    async def command_version(message: types.Message):
+    async def command_version(self, message: types.Message):
         await message.reply(f"Версия бота: {CODE_VERSION}")
 
     async def command_reset(self, message: types.Message):
         chat_id = message.chat.id
-        if chat_id in self.chat_histories:
-            del self.chat_histories[chat_id]
-            await message.reply("История чата сброшена, мудила. Начинаем с чистого листа!")
-        else:
-            await message.reply("А хули сбрасывать? И так пусто, как в голове у тебя!")
+        async with self.db_pool.acquire() as conn:
+            await conn.execute("DELETE FROM chat_history WHERE chat_id = $1", chat_id)
+        await message.reply("История чата сброшена, мудила. Начинаем с чистого листа!")
 
     async def command_team_matches(self, message: types.Message, team_name):
         team_id = TEAM_IDS.get(team_name)
         if not team_id:
             await message.reply("Команда не найдена, мудила!")
             return
-
         data = await ApiClient.get_team_matches(team_id)
         if not data or not data.get("response"):
             await message.reply("Не удалось получить данные о матчах. Пиздец какой-то!")
             return
-
         response = f"Последние 5 матчей {team_name.upper()}:\n\n"
         for fixture in data["response"]:
             fixture_id = fixture["fixture"]["id"]
@@ -311,11 +303,9 @@ class BotApp:
             home_goals = fixture["goals"]["home"] if fixture["goals"]["home"] is not None else 0
             away_goals = fixture["goals"]["away"] if fixture["goals"]["away"] is not None else 0
             date = fixture["fixture"]["date"].split("T")[0]
-            
             result_icon = ("🟢" if home_goals > away_goals else "🔴" if home_goals < away_goals else "🟡") \
                 if fixture["teams"]["home"]["id"] == team_id else \
                 ("🟢" if away_goals > home_goals else "🔴" if away_goals < home_goals else "🟡")
-
             events_data = await ApiClient.get_match_events(fixture_id)
             goals_str = "Голы: "
             if events_data and events_data.get("response"):
@@ -324,20 +314,16 @@ class BotApp:
                     if goal_events else "Нет данных о голах"
             else:
                 goals_str += "Ошибка получения событий"
-
             response += f"{result_icon} {date}: {home_team} {home_goals} - {away_goals} {away_team}\n{goals_str}\n\n"
-
         await message.reply(response)
 
     async def handle_message(self, message: types.Message):
         try:
             if not message.from_user or not message.text:
                 return
-
             message_text = message.text.lower()
-            bot_info = await self.bot.get_me()
-            bot_username = f"@{bot_info.username.lower()}"
-            bot_id = bot_info.id
+            bot_username = f"@{self.bot_info.username.lower()}"
+            bot_id = self.bot_info.id
 
             logger.info(f"Сообщение от {message.from_user.id}: {message.text}")
 
@@ -348,12 +334,12 @@ class BotApp:
                         message_id=message.message_id,
                         reaction=[TARGET_REACTION]
                     )
-                except Exception as e:
+                except aiogram.exceptions.TelegramAPIError as e:
                     logger.error(f"Ошибка при установке реакции: {e}")
 
             is_reply_to_bot = (message.reply_to_message and 
-                              message.reply_to_message.from_user and 
-                              message.reply_to_message.from_user.id == bot_id)
+                             message.reply_to_message.from_user and 
+                             message.reply_to_message.from_user.id == bot_id)
             is_tagged = bot_username in message_text
 
             if message_text in ['сосал?', 'sosal?']:
@@ -365,30 +351,25 @@ class BotApp:
                 await message.reply(random.choice(RESPONSES_SCAMIL))
             elif is_tagged or is_reply_to_bot:
                 query = message_text.replace(bot_username, "").strip() if is_tagged else message_text
-                
                 if not query:
                     await message.reply("И хуле ты мне пишешь пустоту, петушара?")
                     return
-                
                 chat_id = message.chat.id
-                if chat_id not in self.chat_histories:
-                    self.chat_histories[chat_id] = []
-                
-                chat_history = self.chat_histories[chat_id]
+                chat_history = await self.get_chat_history(chat_id)
                 if is_reply_to_bot and message.reply_to_message.text:
-                    chat_history = chat_history + [{"role": "assistant", "content": message.reply_to_message.text}]
-                
+                    chat_history.append({"role": "assistant", "content": message.reply_to_message.text})
                 ai_response = await AiHandler.get_ai_response(chat_history, query)
-                
-                self.chat_histories[chat_id].append({"role": "user", "content": query})
-                self.chat_histories[chat_id].append({"role": "assistant", "content": ai_response})
-                
-                if len(self.chat_histories[chat_id]) > 30:
-                    self.chat_histories[chat_id] = self.chat_histories[chat_id][-30:]
-                
+                await self.save_chat_message(chat_id, "user", query)
+                await self.save_chat_message(chat_id, "assistant", ai_response)
                 await message.reply(ai_response)
+        except aiogram.exceptions.TelegramAPIError as e:
+            logger.error(f"Ошибка Telegram API: {e}")
+        except asyncpg.PostgresError as e:
+            logger.error(f"Ошибка PostgreSQL: {e}")
+        except ValueError as e:
+            logger.error(f"Ошибка обработки данных: {e}")
         except Exception as e:
-            logger.error(f"Ошибка в обработке сообщения: {e}")
+            logger.error(f"Неизвестная ошибка в обработке сообщения: {e}")
 
     def setup_handlers(self):
         self.dp.message.register(self.command_start, Command("start"))
@@ -407,7 +388,6 @@ class BotApp:
         finally:
             await self.on_shutdown()
 
-# Запуск приложения
 async def main():
     bot_app = BotApp()
     try:
