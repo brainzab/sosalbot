@@ -25,12 +25,13 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 # Версия кода
-CODE_VERSION = "2.6"
+CODE_VERSION = "2.7"
 
 # Константы
 MAX_TOKENS = 999
 AI_TEMPERATURE = 1.5
 CHAT_HISTORY_LIMIT = 30
+TARGET_CHAT_ID = -1002362736664  # Чат, в котором сохраняем всю историю
 
 # Получение переменных окружения
 def get_env_var(var_name, default=None):
@@ -197,8 +198,9 @@ class MorningMessageSender:
                 f"₿ *BTC*: ${btc_price_usd:,.2f} USD | {btc_price_byn:,.2f} BYN\n"
                 f"🌍 *WLD*: ${wld_price_usd:.2f} USD | {wld_price_byn:.2f} BYN"
             )
-            await self.bot.send_message(chat_id=CHAT_ID, text=message, parse_mode=types.ParseMode.MARKDOWN)
+            sent_message = await self.bot.send_message(chat_id=CHAT_ID, text=message, parse_mode=types.ParseMode.MARKDOWN)
             logger.info("Утреннее сообщение отправлено")
+            return sent_message
         except aiohttp.ClientError as e:
             logger.error(f"Ошибка при запросе данных: {e}")
         except aiogram.exceptions.TelegramAPIError as e:
@@ -222,6 +224,16 @@ class BotApp:
             logger.info("Бот активен")
             await asyncio.sleep(300)
 
+    async def cleanup_old_messages(self):
+        try:
+            async with self.db_pool.acquire() as conn:
+                await conn.execute(
+                    "DELETE FROM chat_history WHERE timestamp < EXTRACT(EPOCH FROM NOW() - INTERVAL '30 days')"
+                )
+            logger.info("Очистка старых сообщений завершена")
+        except asyncpg.PostgresError as e:
+            logger.error(f"Ошибка PostgreSQL при очистке старых сообщений: {e}")
+
     async def on_startup(self):
         logger.info(f"Запуск бота версии {CODE_VERSION}")
         self.bot_info = await self.bot.get_me()
@@ -230,14 +242,20 @@ class BotApp:
         async with self.db_pool.acquire() as conn:
             await conn.execute("""
                 CREATE TABLE IF NOT EXISTS chat_history (
+                    id SERIAL PRIMARY KEY,
                     chat_id BIGINT,
+                    user_id BIGINT,
+                    message_id BIGINT,
                     role TEXT,
-                    content TEXT,
+                    content TEXT CHECK (LENGTH(content) <= 4000),
                     timestamp DOUBLE PRECISION
                 )
             """)
+            await conn.execute("CREATE INDEX IF NOT EXISTS idx_chat_history_chat_id ON chat_history (chat_id)")
+            await conn.execute("CREATE INDEX IF NOT EXISTS idx_chat_history_timestamp ON chat_history (timestamp)")
         self.scheduler = AsyncIOScheduler(timezone=pytz.timezone('Europe/Moscow'))
-        self.scheduler.add_job(self.morning_sender.send_morning_message, trigger=CronTrigger(hour=12, minute=33))
+        self.scheduler.add_job(self.morning_sender.send_morning_message, trigger=CronTrigger(hour=17, minute=53))
+        self.scheduler.add_job(self.cleanup_old_messages, trigger=CronTrigger(hour=0, minute=0))  # Очистка каждую полночь
         self.scheduler.start()
         logger.info("Планировщик запущен")
         self.keep_alive_task = asyncio.create_task(self.keep_alive())
@@ -267,33 +285,59 @@ class BotApp:
             )
             return [{"role": row['role'], "content": row['content']} for row in reversed(rows)]
 
-    async def save_chat_message(self, chat_id, role, content):
-        async with self.db_pool.acquire() as conn:
-            await conn.execute(
-                "INSERT INTO chat_history (chat_id, role, content, timestamp) VALUES ($1, $2, $3, $4)",
-                chat_id, role, content, datetime.now().timestamp()
-            )
+    async def save_chat_message(self, chat_id, user_id, message_id, role, content):
+        try:
+            content = content.encode('utf-8', 'ignore').decode('utf-8')
+            content = content[:4000] if len(content) > 4000 else content
+            logger.info(f"Сохранение сообщения: chat_id={chat_id}, user_id={user_id}, message_id={message_id}, role={role}, content={content[:50]}...")
+            async with self.db_pool.acquire() as conn:
+                await conn.execute(
+                    "INSERT INTO chat_history (chat_id, user_id, message_id, role, content, timestamp) VALUES ($1, $2, $3, $4, $5, $6)",
+                    chat_id, user_id, message_id, role, content, datetime.now().timestamp()
+                )
+            logger.info(f"Сообщение успешно сохранено: chat_id={chat_id}, user_id={user_id}, message_id={message_id}, role={role}")
+        except asyncpg.PostgresError as e:
+            logger.error(f"Ошибка PostgreSQL при сохранении сообщения: {e}")
+            raise
+        except Exception as e:
+            logger.error(f"Неизвестная ошибка при сохранении сообщения: {e}")
+            raise
 
     async def command_start(self, message: types.Message):
         await message.reply(f"Привет, я бот версии {CODE_VERSION}")
+        if message.chat.id == TARGET_CHAT_ID:
+            sent_message = await message.reply(f"Привет, я бот версии {CODE_VERSION}")
+            await self.save_chat_message(message.chat.id, self.bot_info.id, sent_message.message_id, "assistant", f"Привет, я бот версии {CODE_VERSION}")
 
     async def command_version(self, message: types.Message):
         await message.reply(f"Версия бота: {CODE_VERSION}")
+        if message.chat.id == TARGET_CHAT_ID:
+            sent_message = await message.reply(f"Версия бота: {CODE_VERSION}")
+            await self.save_chat_message(message.chat.id, self.bot_info.id, sent_message.message_id, "assistant", f"Версия бота: {CODE_VERSION}")
 
     async def command_reset(self, message: types.Message):
         chat_id = message.chat.id
         async with self.db_pool.acquire() as conn:
             await conn.execute("DELETE FROM chat_history WHERE chat_id = $1", chat_id)
         await message.reply("История чата сброшена, мудила. Начинаем с чистого листа!")
+        if chat_id == TARGET_CHAT_ID:
+            sent_message = await message.reply("История чата сброшена, мудила. Начинаем с чистого листа!")
+            await self.save_chat_message(chat_id, self.bot_info.id, sent_message.message_id, "assistant", "История чата сброшена, мудила. Начинаем с чистого листа!")
 
     async def command_team_matches(self, message: types.Message, team_name):
         team_id = TEAM_IDS.get(team_name)
         if not team_id:
             await message.reply("Команда не найдена, мудила!")
+            if message.chat.id == TARGET_CHAT_ID:
+                sent_message = await message.reply("Команда не найдена, мудила!")
+                await self.save_chat_message(message.chat.id, self.bot_info.id, sent_message.message_id, "assistant", "Команда не найдена, мудила!")
             return
         data = await ApiClient.get_team_matches(team_id)
         if not data or not data.get("response"):
             await message.reply("Не удалось получить данные о матчах. Пиздец какой-то!")
+            if message.chat.id == TARGET_CHAT_ID:
+                sent_message = await message.reply("Не удалось получить данные о матчах. Пиздец какой-то!")
+                await self.save_chat_message(message.chat.id, self.bot_info.id, sent_message.message_id, "assistant", "Не удалось получить данные о матчах. Пиздец какой-то!")
             return
         response = f"Последние 5 матчей {team_name.upper()}:\n\n"
         for fixture in data["response"]:
@@ -316,6 +360,9 @@ class BotApp:
                 goals_str += "Ошибка получения событий"
             response += f"{result_icon} {date}: {home_team} {home_goals} - {away_goals} {away_team}\n{goals_str}\n\n"
         await message.reply(response)
+        if message.chat.id == TARGET_CHAT_ID:
+            sent_message = await message.reply(response)
+            await self.save_chat_message(message.chat.id, self.bot_info.id, sent_message.message_id, "assistant", response)
 
     async def handle_message(self, message: types.Message):
         try:
@@ -324,9 +371,17 @@ class BotApp:
             message_text = message.text.lower()
             bot_username = f"@{self.bot_info.username.lower()}"
             bot_id = self.bot_info.id
+            chat_id = message.chat.id
+            user_id = message.from_user.id
+            message_id = message.message_id
 
-            logger.info(f"Сообщение от {message.from_user.id}: {message.text}")
+            logger.info(f"Сообщение от {user_id} в чате {chat_id}: {message.text}")
 
+            # Сохраняем ВСЕ сообщения в чате TARGET_CHAT_ID
+            if chat_id == TARGET_CHAT_ID:
+                await self.save_chat_message(chat_id, user_id, message_id, "user", message.text)
+
+            # Реакция на сообщения от TARGET_USER_ID
             if message.from_user.id == TARGET_USER_ID:
                 try:
                     await self.bot.set_message_reaction(
@@ -337,6 +392,7 @@ class BotApp:
                 except aiogram.exceptions.TelegramAPIError as e:
                     logger.error(f"Ошибка при установке реакции: {e}")
 
+            # Проверяем, нужно ли обрабатывать сообщение как запрос к AI
             is_reply_to_bot = (message.reply_to_message and 
                              message.reply_to_message.from_user and 
                              message.reply_to_message.from_user.id == bot_id)
@@ -344,24 +400,32 @@ class BotApp:
 
             if message_text in ['сосал?', 'sosal?']:
                 response = RARE_RESPONSE_SOSAL if random.random() < 0.1 else random.choice(RESPONSES_SOSAL)
-                await message.reply(response)
+                sent_message = await message.reply(response)
+                if chat_id == TARGET_CHAT_ID:
+                    await self.save_chat_message(chat_id, bot_id, sent_message.message_id, "assistant", response)
             elif message_text == 'летал?':
-                await message.reply(RESPONSE_LETAL)
+                sent_message = await message.reply(RESPONSE_LETAL)
+                if chat_id == TARGET_CHAT_ID:
+                    await self.save_chat_message(chat_id, bot_id, sent_message.message_id, "assistant", RESPONSE_LETAL)
             elif message_text == 'скамил?':
-                await message.reply(random.choice(RESPONSES_SCAMIL))
+                response = random.choice(RESPONSES_SCAMIL)
+                sent_message = await message.reply(response)
+                if chat_id == TARGET_CHAT_ID:
+                    await self.save_chat_message(chat_id, bot_id, sent_message.message_id, "assistant", response)
             elif is_tagged or is_reply_to_bot:
                 query = message_text.replace(bot_username, "").strip() if is_tagged else message_text
                 if not query:
-                    await message.reply("И хуле ты мне пишешь пустоту, петушара?")
+                    sent_message = await message.reply("И хуле ты мне пишешь пустоту, петушара?")
+                    if chat_id == TARGET_CHAT_ID:
+                        await self.save_chat_message(chat_id, bot_id, sent_message.message_id, "assistant", "И хуле ты мне пишешь пустоту, петушара?")
                     return
-                chat_id = message.chat.id
                 chat_history = await self.get_chat_history(chat_id)
                 if is_reply_to_bot and message.reply_to_message.text:
                     chat_history.append({"role": "assistant", "content": message.reply_to_message.text})
                 ai_response = await AiHandler.get_ai_response(chat_history, query)
-                await self.save_chat_message(chat_id, "user", query)
-                await self.save_chat_message(chat_id, "assistant", ai_response)
-                await message.reply(ai_response)
+                sent_message = await message.reply(ai_response)
+                if chat_id == TARGET_CHAT_ID:
+                    await self.save_chat_message(chat_id, bot_id, sent_message.message_id, "assistant", ai_response)
         except aiogram.exceptions.TelegramAPIError as e:
             logger.error(f"Ошибка Telegram API: {e}")
         except asyncpg.PostgresError as e:
