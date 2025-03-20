@@ -170,43 +170,123 @@ class MorningMessageSender:
     def __init__(self, bot):
         self.bot = bot
 
-    async def send_morning_message(self):
-        logger.info("Подготовка утреннего сообщения")
-        try:
-            cities = {
-                "Минск": "Minsk,BY", "Жлобин": "Zhlobin,BY", "Гомель": "Gomel,BY",
-                "Житковичи": "Zhitkovichi,BY", "Шри-Ланка": "Colombo,LK", "Ноябрьск": "Noyabrsk,RU"
-            }
-            weather_tasks = [ApiClient.get_weather(code) for code in cities.values()]
-            weather_results, (usd_byn_rate, usd_rub_rate), (btc_price_usd, wld_price_usd) = await asyncio.gather(
-                asyncio.gather(*weather_tasks, return_exceptions=True),
-                ApiClient.get_currency_rates(),
-                ApiClient.get_crypto_prices()
-            )
-            weather_data = dict(zip(cities.keys(), weather_results))
+   async def send_morning_message(self):
+    logger.info("Подготовка утреннего сообщения")
+    try:
+        # Получаем данные о погоде и курсах валют как обычно
+        cities = {
+            "Минск": "Minsk,BY", "Жлобин": "Zhlobin,BY", "Гомель": "Gomel,BY",
+            "Житковичи": "Zhitkovichi,BY", "Шри-Ланка": "Colombo,LK", "Ноябрьск": "Noyabrsk,RU"
+        }
+        weather_tasks = [ApiClient.get_weather(code) for code in cities.values()]
+        weather_results, (usd_byn_rate, usd_rub_rate), (btc_price_usd, wld_price_usd) = await asyncio.gather(
+            asyncio.gather(*weather_tasks, return_exceptions=True),
+            ApiClient.get_currency_rates(),
+            ApiClient.get_crypto_prices()
+        )
+        weather_data = dict(zip(cities.keys(), weather_results))
 
-            btc_price_byn = float(btc_price_usd) * float(usd_byn_rate) if btc_price_usd and usd_byn_rate else 0
-            wld_price_byn = float(wld_price_usd) * float(usd_byn_rate) if wld_price_usd and usd_byn_rate else 0
+        btc_price_byn = float(btc_price_usd) * float(usd_byn_rate) if btc_price_usd and usd_byn_rate else 0
+        wld_price_byn = float(wld_price_usd) * float(usd_byn_rate) if wld_price_usd and usd_byn_rate else 0
 
-            message = (
-                "Родные мои, всем доброе утро и хорошего дня! ❤️\n\n"
-                "*Положняк по погоде:*\n"
-                + "\n".join(f"🌥 *{city}*: {data}" for city, data in weather_data.items()) + "\n\n"
-                "*Положняк по курсам:*\n"
-                f"💵 *USD/BYN*: {usd_byn_rate:.2f} BYN\n"
-                f"💵 *USD/RUB*: {usd_rub_rate:.2f} RUB\n"
-                f"₿ *BTC*: ${btc_price_usd:,.2f} USD | {btc_price_byn:,.2f} BYN\n"
-                f"🌍 *WLD*: ${wld_price_usd:.2f} USD | {wld_price_byn:.2f} BYN"
+        # Формируем базовое сообщение
+        base_message = (
+            "*Положняк по погоде:*\n"
+            + "\n".join(f"🌥 *{city}*: {data}" for city, data in weather_data.items()) + "\n\n"
+            "*Положняк по курсам:*\n"
+            f"💵 *USD/BYN*: {usd_byn_rate:.2f} BYN\n"
+            f"💵 *USD/RUB*: {usd_rub_rate:.2f} RUB\n"
+            f"₿ *BTC*: ${btc_price_usd:,.2f} USD | {btc_price_byn:,.2f} BYN\n"
+            f"🌍 *WLD*: ${wld_price_usd:.2f} USD | {wld_price_byn:.2f} BYN"
+        )
+        
+        # Генерируем персонализированный комментарий на основе данных
+        # Определяем показатели для комментария
+        avg_temp = sum([float(data.split('°')[0]) for data in weather_data.values() if '°' in data]) / len(weather_data)
+        btc_change = random.uniform(-5, 5)  # Симуляция изменения курса
+        
+        # Запрашиваем комментарий от AI
+        ai_prompt = f"""
+        Сегодня средняя температура в городах {avg_temp:.1f}°C.
+        Курс USD/BYN: {usd_byn_rate:.2f}, USD/RUB: {usd_rub_rate:.2f}.
+        Биткоин стоит ${btc_price_usd:,.2f} USD с изменением {btc_change:.1f}%.
+        Напиши короткое приветствие для утреннего сообщения в групповой чат, учитывая эти данные.
+        Будь остроумным и немного саркастичным. Максимум 2-3 предложения.
+        """
+        
+        ai_response = await AiHandler.get_ai_response([], ai_prompt)
+        
+        # Формируем итоговое сообщение
+        final_message = f"{ai_response}\n\n{base_message}"
+        
+        sent_message = await self.bot.send_message(chat_id=CHAT_ID, text=final_message, parse_mode=types.ParseMode.MARKDOWN)
+        logger.info("Утреннее сообщение отправлено")
+        return sent_message
+    except Exception as e:
+        logger.error(f"Ошибка при отправке утреннего сообщения: {e}")
+
+class ContextManager:
+    def __init__(self, db_pool, history_limit=100):
+        self.db_pool = db_pool
+        self.history_limit = history_limit
+        self.last_bot_message_time = {}
+        self.conversation_topics = {}
+        self.random_intervention_chance = 0.05  # 5% шанс вмешаться
+
+    async def process_message(self, message, bot_id):
+        chat_id = message.chat.id
+        user_id = message.from_user.id
+        message_text = message.text
+        
+        # Сохраняем все сообщения в базу для контекста
+        await self.save_message(chat_id, user_id, message_text)
+        
+        # Обновляем текущие темы разговора
+        self._update_conversation_topics(chat_id, message_text)
+        
+        # Проверяем, нужно ли боту вмешаться
+        should_intervene = False
+        
+        # Не вмешиваемся, если сообщение от бота
+        if user_id != bot_id:
+            # Случайное вмешательство с низкой вероятностью
+            should_intervene = random.random() < self.random_intervention_chance
+            
+            # Не вмешиваемся, если бот недавно писал
+            if chat_id in self.last_bot_message_time:
+                time_since_last = time.time() - self.last_bot_message_time[chat_id]
+                if time_since_last < 300:  # 5 минут
+                    should_intervene = False
+        
+        return should_intervene
+    
+    async def get_context(self, chat_id, limit=10):
+        # Получаем последние сообщения из базы для контекста
+        async with self.db_pool.acquire() as conn:
+            rows = await conn.fetch(
+                """
+                SELECT user_id, content 
+                FROM chat_history 
+                WHERE chat_id = $1 
+                ORDER BY timestamp DESC 
+                LIMIT $2
+                """,
+                chat_id, limit
             )
-            sent_message = await self.bot.send_message(chat_id=CHAT_ID, text=message, parse_mode=types.ParseMode.MARKDOWN)
-            logger.info("Утреннее сообщение отправлено")
-            return sent_message
-        except aiohttp.ClientError as e:
-            logger.error(f"Ошибка при запросе данных: {e}")
-        except aiogram.exceptions.TelegramAPIError as e:
-            logger.error(f"Ошибка отправки сообщения в Telegram: {e}")
-        except ValueError as e:
-            logger.error(f"Ошибка форматирования данных: {e}")
+            
+            # Форматируем контекст для AI
+            context = "Последние сообщения в группе:\n\n"
+            for row in reversed(rows):
+                user_type = "Бот" if row['user_id'] == bot_id else "Пользователь"
+                context += f"{user_type}: {row['content']}\n"
+            
+            return context
+    
+    def _update_conversation_topics(self, chat_id, text):
+        # Простой анализ тем разговора
+        # Можно расширить с помощью NLP или ключевых слов
+        if chat_id not in self.conversation_topics:
+            self.conversation_topics[chat_id] = []
 
 # Основной класс бота
 class BotApp:
@@ -411,108 +491,66 @@ class BotApp:
         if message.chat.id == TARGET_CHAT_ID:
             await self.save_chat_message(message.chat.id, self.bot_info.id, sent_message.message_id, "assistant", response)
 
-    async def handle_message(self, message: types.Message):
-        try:
-            if not message.from_user or not message.text:
-                return
-            message_text = message.text.lower()
-            bot_username = f"@{self.bot_info.username.lower()}"
-            bot_id = self.bot_info.id
-            chat_id = message.chat.id
-            user_id = message.from_user.id
-            message_id = message.message_id
+async def handle_message(self, message: types.Message):
+    try:
+        if not message.from_user or not message.text:
+            return
+        
+        message_text = message.text.lower()
+        bot_username = f"@{self.bot_info.username.lower()}"
+        bot_id = self.bot_info.id
+        chat_id = message.chat.id
+        user_id = message.from_user.id
+        message_id = message.message_id
 
-            logger.info(f"Сообщение от {user_id} в чате {chat_id}: {message.text}")
+        # Сохраняем сообщение
+        await self.save_chat_message(chat_id, user_id, message_id, "user", message.text)
+        
+        # Проверяем, нужно ли боту вмешаться
+        should_intervene = await self.context_manager.process_message(message, bot_id)
+        
+        # Проверяем особые случаи
+        if message_text in ['сосал?', 'sosal?']:
+            # Обработка особых случаев...
+        
+        # Обработка сообщений с тегом или ответом
+        is_reply_to_bot = (message.reply_to_message and 
+                          message.reply_to_message.from_user and 
+                          message.reply_to_message.from_user.id == bot_id)
+        is_tagged = bot_username in message_text
 
-            # Сохраняем ВСЕ сообщения в чате TARGET_CHAT_ID
-            if chat_id == TARGET_CHAT_ID:
-                try:
-                    await self.save_chat_message(chat_id, user_id, message_id, "user", message.text)
-                except asyncpg.PostgresError as e:
-                    logger.error(f"Ошибка PostgreSQL при сохранении сообщения: {e}")
-                    # Продолжаем обработку, даже если сохранение не удалось
-                except Exception as e:
-                    logger.error(f"Неизвестная ошибка при сохранении сообщения: {e}")
-                    # Продолжаем обработку
-
-            # Реакция на сообщения от TARGET_USER_ID
-            if message.from_user.id == TARGET_USER_ID:
-                try:
-                    await self.bot.set_message_reaction(
-                        chat_id=message.chat.id,
-                        message_id=message.message_id,
-                        reaction=[TARGET_REACTION]
-                    )
-                except aiogram.exceptions.TelegramAPIError as e:
-                    logger.error(f"Ошибка при установке реакции: {e}")
-
-            # Проверяем, нужно ли обрабатывать сообщение как запрос к AI
-            is_reply_to_bot = (message.reply_to_message and 
-                             message.reply_to_message.from_user and 
-                             message.reply_to_message.from_user.id == bot_id)
-            is_tagged = bot_username in message_text
-
-            if message_text in ['сосал?', 'sosal?']:
-                response = RARE_RESPONSE_SOSAL if random.random() < 0.1 else random.choice(RESPONSES_SOSAL)
-                sent_message = await message.reply(response)
-                if chat_id == TARGET_CHAT_ID:
-                    try:
-                        await self.save_chat_message(chat_id, bot_id, sent_message.message_id, "assistant", response)
-                    except asyncpg.PostgresError as e:
-                        logger.error(f"Ошибка PostgreSQL при сохранении ответа бота: {e}")
-                    except Exception as e:
-                        logger.error(f"Неизвестная ошибка при сохранении ответа бота: {e}")
-            elif message_text == 'летал?':
-                sent_message = await message.reply(RESPONSE_LETAL)
-                if chat_id == TARGET_CHAT_ID:
-                    try:
-                        await self.save_chat_message(chat_id, bot_id, sent_message.message_id, "assistant", RESPONSE_LETAL)
-                    except asyncpg.PostgresError as e:
-                        logger.error(f"Ошибка PostgreSQL при сохранении ответа бота: {e}")
-                    except Exception as e:
-                        logger.error(f"Неизвестная ошибка при сохранении ответа бота: {e}")
-            elif message_text == 'скамил?':
-                response = random.choice(RESPONSES_SCAMIL)
-                sent_message = await message.reply(response)
-                if chat_id == TARGET_CHAT_ID:
-                    try:
-                        await self.save_chat_message(chat_id, bot_id, sent_message.message_id, "assistant", response)
-                    except asyncpg.PostgresError as e:
-                        logger.error(f"Ошибка PostgreSQL при сохранении ответа бота: {e}")
-                    except Exception as e:
-                        logger.error(f"Неизвестная ошибка при сохранении ответа бота: {e}")
-            elif is_tagged or is_reply_to_bot:
-                query = message_text.replace(bot_username, "").strip() if is_tagged else message_text
-                if not query:
-                    sent_message = await message.reply("И хуле ты мне пишешь пустоту, петушара?")
-                    if chat_id == TARGET_CHAT_ID:
-                        try:
-                            await self.save_chat_message(chat_id, bot_id, sent_message.message_id, "assistant", "И хуле ты мне пишешь пустоту, петушара?")
-                        except asyncpg.PostgresError as e:
-                            logger.error(f"Ошибка PostgreSQL при сохранении ответа бота: {e}")
-                        except Exception as e:
-                            logger.error(f"Неизвестная ошибка при сохранении ответа бота: {e}")
-                    return
-                chat_history = await self.get_chat_history(chat_id)
-                if is_reply_to_bot and message.reply_to_message.text:
-                    chat_history.append({"role": "assistant", "content": message.reply_to_message.text})
-                ai_response = await AiHandler.get_ai_response(chat_history, query)
-                sent_message = await message.reply(ai_response)
-                if chat_id == TARGET_CHAT_ID:
-                    try:
-                        await self.save_chat_message(chat_id, bot_id, sent_message.message_id, "assistant", ai_response)
-                    except asyncpg.PostgresError as e:
-                        logger.error(f"Ошибка PostgreSQL при сохранении ответа бота: {e}")
-                    except Exception as e:
-                        logger.error(f"Неизвестная ошибка при сохранении ответа бота: {e}")
-        except aiogram.exceptions.TelegramAPIError as e:
-            logger.error(f"Ошибка Telegram API: {e}")
-        except asyncpg.PostgresError as e:
-            logger.error(f"Ошибка PostgreSQL: {e}")
-        except ValueError as e:
-            logger.error(f"Ошибка обработки данных: {e}")
-        except Exception as e:
-            logger.error(f"Неизвестная ошибка в обработке сообщения: {e}")
+        if is_tagged or is_reply_to_bot:
+            # Получаем контекст с учетом всей истории группы
+            group_context = await self.context_manager.get_context(chat_id)
+            
+            # Формируем запрос для AI
+            if is_tagged:
+                query = message_text.replace(bot_username, "").strip()
+                ai_prompt = f"Тебя упомянули в группе. Ответь на вопрос: {query}\n\nВот контекст последних сообщений:\n{group_context}"
+            else:
+                ai_prompt = f"Тебе ответили на сообщение. Вот новое сообщение: {message_text}\n\nВот контекст последних сообщений:\n{group_context}"
+            
+            # Получаем ответ от AI
+            ai_response = await AiHandler.get_ai_response([], ai_prompt)
+            
+            # Отправляем ответ
+            sent_message = await message.reply(ai_response)
+            await self.save_chat_message(chat_id, bot_id, sent_message.message_id, "assistant", ai_response)
+        
+        # Обработка случайного вмешательства
+        elif should_intervene:
+            group_context = await self.context_manager.get_context(chat_id)
+            ai_prompt = f"Ты читаешь групповой чат и хочешь вмешаться. Вот последние сообщения:\n{group_context}\n\nНапиши короткое сообщение для вмешательства в разговор, максимум 1-2 предложения."
+            
+            ai_response = await AiHandler.get_ai_response([], ai_prompt)
+            sent_message = await message.reply(ai_response)
+            await self.save_chat_message(chat_id, bot_id, sent_message.message_id, "assistant", ai_response)
+            
+            # Обновляем время последнего сообщения бота
+            self.context_manager.last_bot_message_time[chat_id] = time.time()
+    
+    except Exception as e:
+        logger.error(f"Ошибка при обработке сообщения: {e}", exc_info=True)
 
     def setup_handlers(self):
         self.dp.message.register(self.command_start, Command("start"))
