@@ -51,12 +51,12 @@ DATABASE_URL = get_env_var('DATABASE_URL')
 TARGET_USER_ID = int(get_env_var('TARGET_USER_ID', '660949286'))
 
 # Константы для ответов из .env
-RESPONSES_SOSAL = json.loads(get_env_var('RESPONSES_SOSAL', '["да", "было", "ну сосал", "прям ща"]'))
-RARE_RESPONSE_SOSAL = get_env_var('RARE_RESPONSE_SOSAL', 'пошел нахуй')
-RESPONSE_LETAL = get_env_var('RESPONSE_LETAL', 'да')
-RESPONSES_SCAMIL = json.loads(get_env_var('RESPONSES_SCAMIL', '["да", "было", "с кайфом"]'))
-TEAM_IDS = json.loads(get_env_var('TEAM_IDS', '{"real": 541, "lfc": 40, "arsenal": 42}'))
-TARGET_REACTION = ReactionTypeEmoji(emoji=get_env_var('TARGET_REACTION', '😁'))
+RESPONSES_SOSAL = json.loads(get_env_var('RESPONSES_SOSAL'))  # Обязательная переменная
+RARE_RESPONSE_SOSAL = get_env_var('RARE_RESPONSE_SOSAL')      # Обязательная переменная
+RESPONSE_LETAL = get_env_var('RESPONSE_LETAL')                # Обязательная переменная
+RESPONSES_SCAMIL = json.loads(get_env_var('RESPONSES_SCAMIL'))  # Обязательная переменная
+TEAM_IDS = json.loads(get_env_var('TEAM_IDS'))                # Обязательная переменная
+TARGET_REACTION = ReactionTypeEmoji(emoji=get_env_var('TARGET_REACTION'))  # Обязательная переменная
 
 # Настройка клиента DeepSeek
 deepseek_client = AsyncOpenAI(api_key=DEEPSEEK_API_KEY, base_url="https://api.deepseek.com")
@@ -304,39 +304,34 @@ class BotApp:
             raise
 
     async def command_start(self, message: types.Message):
-        await message.reply(f"Привет, я бот версии {CODE_VERSION}")
+        sent_message = await message.reply(f"Привет, я бот версии {CODE_VERSION}")
         if message.chat.id == TARGET_CHAT_ID:
-            sent_message = await message.reply(f"Привет, я бот версии {CODE_VERSION}")
             await self.save_chat_message(message.chat.id, self.bot_info.id, sent_message.message_id, "assistant", f"Привет, я бот версии {CODE_VERSION}")
 
     async def command_version(self, message: types.Message):
-        await message.reply(f"Версия бота: {CODE_VERSION}")
+        sent_message = await message.reply(f"Версия бота: {CODE_VERSION}")
         if message.chat.id == TARGET_CHAT_ID:
-            sent_message = await message.reply(f"Версия бота: {CODE_VERSION}")
             await self.save_chat_message(message.chat.id, self.bot_info.id, sent_message.message_id, "assistant", f"Версия бота: {CODE_VERSION}")
 
     async def command_reset(self, message: types.Message):
         chat_id = message.chat.id
         async with self.db_pool.acquire() as conn:
             await conn.execute("DELETE FROM chat_history WHERE chat_id = $1", chat_id)
-        await message.reply("История чата сброшена, мудила. Начинаем с чистого листа!")
+        sent_message = await message.reply("История чата сброшена, мудила. Начинаем с чистого листа!")
         if chat_id == TARGET_CHAT_ID:
-            sent_message = await message.reply("История чата сброшена, мудила. Начинаем с чистого листа!")
             await self.save_chat_message(chat_id, self.bot_info.id, sent_message.message_id, "assistant", "История чата сброшена, мудила. Начинаем с чистого листа!")
 
     async def command_team_matches(self, message: types.Message, team_name):
         team_id = TEAM_IDS.get(team_name)
         if not team_id:
-            await message.reply("Команда не найдена, мудила!")
+            sent_message = await message.reply("Команда не найдена, мудила!")
             if message.chat.id == TARGET_CHAT_ID:
-                sent_message = await message.reply("Команда не найдена, мудила!")
                 await self.save_chat_message(message.chat.id, self.bot_info.id, sent_message.message_id, "assistant", "Команда не найдена, мудила!")
             return
         data = await ApiClient.get_team_matches(team_id)
         if not data or not data.get("response"):
-            await message.reply("Не удалось получить данные о матчах. Пиздец какой-то!")
+            sent_message = await message.reply("Не удалось получить данные о матчах. Пиздец какой-то!")
             if message.chat.id == TARGET_CHAT_ID:
-                sent_message = await message.reply("Не удалось получить данные о матчах. Пиздец какой-то!")
                 await self.save_chat_message(message.chat.id, self.bot_info.id, sent_message.message_id, "assistant", "Не удалось получить данные о матчах. Пиздец какой-то!")
             return
         response = f"Последние 5 матчей {team_name.upper()}:\n\n"
@@ -359,9 +354,8 @@ class BotApp:
             else:
                 goals_str += "Ошибка получения событий"
             response += f"{result_icon} {date}: {home_team} {home_goals} - {away_goals} {away_team}\n{goals_str}\n\n"
-        await message.reply(response)
+        sent_message = await message.reply(response)
         if message.chat.id == TARGET_CHAT_ID:
-            sent_message = await message.reply(response)
             await self.save_chat_message(message.chat.id, self.bot_info.id, sent_message.message_id, "assistant", response)
 
     async def handle_message(self, message: types.Message):
@@ -379,13 +373,20 @@ class BotApp:
 
             # Сохраняем ВСЕ сообщения в чате TARGET_CHAT_ID
             if chat_id == TARGET_CHAT_ID:
-                await self.save_chat_message(chat_id, user_id, message_id, "user", message.text)
+                try:
+                    await self.save_chat_message(chat_id, user_id, message_id, "user", message.text)
+                except asyncpg.PostgresError as e:
+                    logger.error(f"Ошибка PostgreSQL при сохранении сообщения: {e}")
+                    # Продолжаем обработку, даже если сохранение не удалось
+                except Exception as e:
+                    logger.error(f"Неизвестная ошибка при сохранении сообщения: {e}")
+                    # Продолжаем обработку
 
             # Реакция на сообщения от TARGET_USER_ID
             if message.from_user.id == TARGET_USER_ID:
                 try:
                     await self.bot.set_message_reaction(
-                        chat_id=message.chat_id,
+                        chat_id=message.chat.id,
                         message_id=message.message_id,
                         reaction=[TARGET_REACTION]
                     )
@@ -402,22 +403,42 @@ class BotApp:
                 response = RARE_RESPONSE_SOSAL if random.random() < 0.1 else random.choice(RESPONSES_SOSAL)
                 sent_message = await message.reply(response)
                 if chat_id == TARGET_CHAT_ID:
-                    await self.save_chat_message(chat_id, bot_id, sent_message.message_id, "assistant", response)
+                    try:
+                        await self.save_chat_message(chat_id, bot_id, sent_message.message_id, "assistant", response)
+                    except asyncpg.PostgresError as e:
+                        logger.error(f"Ошибка PostgreSQL при сохранении ответа бота: {e}")
+                    except Exception as e:
+                        logger.error(f"Неизвестная ошибка при сохранении ответа бота: {e}")
             elif message_text == 'летал?':
                 sent_message = await message.reply(RESPONSE_LETAL)
                 if chat_id == TARGET_CHAT_ID:
-                    await self.save_chat_message(chat_id, bot_id, sent_message.message_id, "assistant", RESPONSE_LETAL)
+                    try:
+                        await self.save_chat_message(chat_id, bot_id, sent_message.message_id, "assistant", RESPONSE_LETAL)
+                    except asyncpg.PostgresError as e:
+                        logger.error(f"Ошибка PostgreSQL при сохранении ответа бота: {e}")
+                    except Exception as e:
+                        logger.error(f"Неизвестная ошибка при сохранении ответа бота: {e}")
             elif message_text == 'скамил?':
                 response = random.choice(RESPONSES_SCAMIL)
                 sent_message = await message.reply(response)
                 if chat_id == TARGET_CHAT_ID:
-                    await self.save_chat_message(chat_id, bot_id, sent_message.message_id, "assistant", response)
+                    try:
+                        await self.save_chat_message(chat_id, bot_id, sent_message.message_id, "assistant", response)
+                    except asyncpg.PostgresError as e:
+                        logger.error(f"Ошибка PostgreSQL при сохранении ответа бота: {e}")
+                    except Exception as e:
+                        logger.error(f"Неизвестная ошибка при сохранении ответа бота: {e}")
             elif is_tagged or is_reply_to_bot:
                 query = message_text.replace(bot_username, "").strip() if is_tagged else message_text
                 if not query:
                     sent_message = await message.reply("И хуле ты мне пишешь пустоту, петушара?")
                     if chat_id == TARGET_CHAT_ID:
-                        await self.save_chat_message(chat_id, bot_id, sent_message.message_id, "assistant", "И хуле ты мне пишешь пустоту, петушара?")
+                        try:
+                            await self.save_chat_message(chat_id, bot_id, sent_message.message_id, "assistant", "И хуле ты мне пишешь пустоту, петушара?")
+                        except asyncpg.PostgresError as e:
+                            logger.error(f"Ошибка PostgreSQL при сохранении ответа бота: {e}")
+                        except Exception as e:
+                            logger.error(f"Неизвестная ошибка при сохранении ответа бота: {e}")
                     return
                 chat_history = await self.get_chat_history(chat_id)
                 if is_reply_to_bot and message.reply_to_message.text:
@@ -425,7 +446,12 @@ class BotApp:
                 ai_response = await AiHandler.get_ai_response(chat_history, query)
                 sent_message = await message.reply(ai_response)
                 if chat_id == TARGET_CHAT_ID:
-                    await self.save_chat_message(chat_id, bot_id, sent_message.message_id, "assistant", ai_response)
+                    try:
+                        await self.save_chat_message(chat_id, bot_id, sent_message.message_id, "assistant", ai_response)
+                    except asyncpg.PostgresError as e:
+                        logger.error(f"Ошибка PostgreSQL при сохранении ответа бота: {e}")
+                    except Exception as e:
+                        logger.error(f"Неизвестная ошибка при сохранении ответа бота: {e}")
         except aiogram.exceptions.TelegramAPIError as e:
             logger.error(f"Ошибка Telegram API: {e}")
         except asyncpg.PostgresError as e:
