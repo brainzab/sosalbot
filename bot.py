@@ -240,6 +240,7 @@ class BotApp:
         self.morning_sender = MorningMessageSender(self.bot)
         self.db_pool = await asyncpg.create_pool(DATABASE_URL)
         async with self.db_pool.acquire() as conn:
+            # Создаём таблицу chat_history с колонкой reset_id
             await conn.execute("""
                 CREATE TABLE IF NOT EXISTS chat_history (
                     id SERIAL PRIMARY KEY,
@@ -248,11 +249,20 @@ class BotApp:
                     message_id BIGINT,
                     role TEXT,
                     content TEXT CHECK (LENGTH(content) <= 4000),
-                    timestamp DOUBLE PRECISION
+                    timestamp DOUBLE PRECISION,
+                    reset_id INTEGER DEFAULT 0
+                )
+            """)
+            # Создаём таблицу для хранения reset_id для каждого чата
+            await conn.execute("""
+                CREATE TABLE IF NOT EXISTS chat_reset_ids (
+                    chat_id BIGINT PRIMARY KEY,
+                    reset_id INTEGER DEFAULT 0
                 )
             """)
             await conn.execute("CREATE INDEX IF NOT EXISTS idx_chat_history_chat_id ON chat_history (chat_id)")
             await conn.execute("CREATE INDEX IF NOT EXISTS idx_chat_history_timestamp ON chat_history (timestamp)")
+            await conn.execute("CREATE INDEX IF NOT EXISTS idx_chat_history_reset_id ON chat_history (reset_id)")
         self.scheduler = AsyncIOScheduler(timezone=pytz.timezone('Europe/Moscow'))
         self.scheduler.add_job(self.morning_sender.send_morning_message, trigger=CronTrigger(hour=17, minute=53))
         self.scheduler.add_job(self.cleanup_old_messages, trigger=CronTrigger(hour=0, minute=0))  # Очистка каждую полночь
@@ -277,11 +287,51 @@ class BotApp:
         await self.bot.session.close()
         logger.info("Бот остановлен")
 
+    async def get_reset_id(self, chat_id):
+        async with self.db_pool.acquire() as conn:
+            reset_id = await conn.fetchval(
+                "SELECT reset_id FROM chat_reset_ids WHERE chat_id = $1",
+                chat_id
+            )
+            if reset_id is None:
+                # Если записи нет, создаём с reset_id = 0
+                await conn.execute(
+                    "INSERT INTO chat_reset_ids (chat_id, reset_id) VALUES ($1, 0) ON CONFLICT (chat_id) DO NOTHING",
+                    chat_id
+                )
+                return 0
+            return reset_id
+
+    async def increment_reset_id(self, chat_id):
+        async with self.db_pool.acquire() as conn:
+            # Увеличиваем reset_id на 1, если запись существует, или создаём новую
+            await conn.execute(
+                """
+                INSERT INTO chat_reset_ids (chat_id, reset_id)
+                VALUES ($1, 1)
+                ON CONFLICT (chat_id)
+                DO UPDATE SET reset_id = chat_reset_ids.reset_id + 1
+                """,
+                chat_id
+            )
+            new_reset_id = await conn.fetchval(
+                "SELECT reset_id FROM chat_reset_ids WHERE chat_id = $1",
+                chat_id
+            )
+            return new_reset_id
+
     async def get_chat_history(self, chat_id):
+        reset_id = await self.get_reset_id(chat_id)
         async with self.db_pool.acquire() as conn:
             rows = await conn.fetch(
-                "SELECT role, content FROM chat_history WHERE chat_id = $1 ORDER BY timestamp DESC LIMIT $2",
-                chat_id, CHAT_HISTORY_LIMIT
+                """
+                SELECT role, content
+                FROM chat_history
+                WHERE chat_id = $1 AND reset_id = $2
+                ORDER BY timestamp DESC
+                LIMIT $3
+                """,
+                chat_id, reset_id, CHAT_HISTORY_LIMIT
             )
             return [{"role": row['role'], "content": row['content']} for row in reversed(rows)]
 
@@ -289,13 +339,17 @@ class BotApp:
         try:
             content = content.encode('utf-8', 'ignore').decode('utf-8')
             content = content[:4000] if len(content) > 4000 else content
-            logger.info(f"Сохранение сообщения: chat_id={chat_id}, user_id={user_id}, message_id={message_id}, role={role}, content={content[:50]}...")
+            reset_id = await self.get_reset_id(chat_id)
+            logger.info(f"Сохранение сообщения: chat_id={chat_id}, user_id={user_id}, message_id={message_id}, role={role}, reset_id={reset_id}, content={content[:50]}...")
             async with self.db_pool.acquire() as conn:
                 await conn.execute(
-                    "INSERT INTO chat_history (chat_id, user_id, message_id, role, content, timestamp) VALUES ($1, $2, $3, $4, $5, $6)",
-                    chat_id, user_id, message_id, role, content, datetime.now().timestamp()
+                    """
+                    INSERT INTO chat_history (chat_id, user_id, message_id, role, content, timestamp, reset_id)
+                    VALUES ($1, $2, $3, $4, $5, $6, $7)
+                    """,
+                    chat_id, user_id, message_id, role, content, datetime.now().timestamp(), reset_id
                 )
-            logger.info(f"Сообщение успешно сохранено: chat_id={chat_id}, user_id={user_id}, message_id={message_id}, role={role}")
+            logger.info(f"Сообщение успешно сохранено: chat_id={chat_id}, user_id={user_id}, message_id={message_id}, role={role}, reset_id={reset_id}")
         except asyncpg.PostgresError as e:
             logger.error(f"Ошибка PostgreSQL при сохранении сообщения: {e}")
             raise
@@ -315,11 +369,10 @@ class BotApp:
 
     async def command_reset(self, message: types.Message):
         chat_id = message.chat.id
-        async with self.db_pool.acquire() as conn:
-            await conn.execute("DELETE FROM chat_history WHERE chat_id = $1", chat_id)
-        sent_message = await message.reply("История чата сброшена, мудила. Начинаем с чистого листа!")
+        await self.increment_reset_id(chat_id)
+        sent_message = await message.reply("Контекст для AI сброшен, мудила. Начинаем с чистого листа!")
         if chat_id == TARGET_CHAT_ID:
-            await self.save_chat_message(chat_id, self.bot_info.id, sent_message.message_id, "assistant", "История чата сброшена, мудила. Начинаем с чистого листа!")
+            await self.save_chat_message(chat_id, self.bot_info.id, sent_message.message_id, "assistant", "Контекст для AI сброшен, мудила. Начинаем с чистого листа!")
 
     async def command_team_matches(self, message: types.Message, team_name):
         team_id = TEAM_IDS.get(team_name)
